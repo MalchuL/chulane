@@ -1,5 +1,6 @@
 node_modules/
 .pnpm-store/
+third-party/
 .turbo/
 dist/
 lib/
