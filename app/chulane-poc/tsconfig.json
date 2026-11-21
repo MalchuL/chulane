@@ -1,0 +1,62 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "strictNullChecks": true,
+    "noEmit": true,
+    "paths": {
+      "@chulane/block-graph": [
+        "./vendor/rivto/packages/block-graph/src/index.ts"
+      ],
+      "@chulane/crdt-doc": [
+        "./vendor/rivto/packages/crdt-doc/src/index.ts"
+      ],
+      "@chulane/document-model": [
+        "./vendor/rivto/packages/document-model/src/index.ts"
+      ],
+      "@chulane/graph-runtime": [
+        "./vendor/rivto/packages/graph-runtime/src/index.ts"
+      ],
+      "@chulane/rivto-react": [
+        "./vendor/rivto/packages/react-rivto-editor/src/index.ts"
+      ],
+      "@chulane/rivto-edgeless": [
+        "./vendor/rivto/packages/rivto-edgeless/src/index.ts"
+      ],
+      "@chulane/rivto": [
+        "./vendor/rivto/packages/rivto-editor-core/src/index.ts"
+      ],
+      "@chulane/rivto-keyboard": [
+        "./vendor/rivto/packages/rivto-keyboard/src/index.ts"
+      ],
+      "@chulane/rivto-page": [
+        "./vendor/rivto/packages/rivto-page/src/index.ts"
+      ],
+      "@chulane/rivto-utils": [
+        "./vendor/rivto/packages/rivto-utils/src/index.ts"
+      ],
+      "@chulane/rivto-edgeless/*": [
+        "./vendor/rivto/packages/rivto-edgeless/src/*.ts"
+      ],
+      "@chulane/rivto-react/block-factories": [
+        "./vendor/rivto/packages/react-rivto-editor/src/block-factories.ts"
+      ],
+      "@deepseek-ai/cosmokit": [
+        "./node_modules/@deepseek-ai/cosmokit"
+      ],
+      "@standard-schema/spec": [
+        "./node_modules/@standard-schema/spec"
+      ]
+    }
+  },
+  "include": [
+    "src",
+    "tests",
+    "vite.config.ts",
+    "examples/**/*.ts"
+  ]
+}

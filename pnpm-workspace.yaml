@@ -3,3 +3,4 @@ packages:
   - app/*
   - packages/*
   - vendor/*
+  - '!app/chulane-poc'

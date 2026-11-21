@@ -1,0 +1,10 @@
+packages:
+  - vendor/rivto/packages/*
+  - packaging/web-runtime
+catalog:
+  '@mastra/core': 1.85.0
+  zod: 4.6.7
+allowBuilds:
+  electron: true
+  esbuild: true
+  '@parcel/watcher': false

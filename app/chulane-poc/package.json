@@ -1,0 +1,49 @@
+{
+  "name": "chulane-poc",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.8.0",
+  "main": "dist-host/desktop.cjs",
+  "scripts": {
+    "build": "pnpm --filter @chulane/rivto-page build:styles && vite build && esbuild src/desktop/main.ts --tsconfig=tsconfig.json --bundle --platform=node --format=cjs --alias:@deepseek-ai/cosmokit=@deepseek-ai/cosmokit --external:@mastra/core/* --external:electron --external:node:* --outfile=dist-host/desktop.cjs && esbuild src/server/main.ts --tsconfig=tsconfig.json --external:@mastra/core/* --bundle --platform=node --format=esm --outfile=dist-host/web/main.mjs && esbuild examples/reading-break/plugin.ts --format=esm --outfile=examples/reading-break/plugin.mjs",
+    "web": "node dist-host/web/main.mjs",
+    "desktop": "electron .",
+    "test": "tsx --test \"tests/integration/*.test.ts\"",
+    "smoke": "tsx tests/e2e/hosts.spec.ts",
+    "check-types": "tsc --noEmit",
+    "smoke:agent": "tsx tests/e2e/agent.spec.ts",
+    "smoke:agent:live": "tsx tests/e2e/live-agent.ts",
+    "docker:prepare": "node -e \"require('node:fs').rmSync('dist-host/web-runtime',{recursive:true,force:true})\" && pnpm --config.inject-workspace-packages=true --filter @chulane/web-runtime deploy --prod dist-host/web-runtime"
+  },
+  "dependencies": {
+    "@chulane/crdt-doc": "workspace:*",
+    "@chulane/document-model": "workspace:*",
+    "@chulane/rivto": "workspace:*",
+    "@chulane/rivto-react": "workspace:*",
+    "@deepseek-ai/cosmokit": "~1.9.0",
+    "@dnd-kit/react": "0.5.0",
+    "@mastra/core": "catalog:",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "class-variance-authority": "0.7.1",
+    "cn": "0.3.3",
+    "lucide-react": "^1.28.0",
+    "radix-ui": "1.8.1",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "yjs": "13.6.33",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.1",
+    "@standard-schema/spec": "^1.1.0",
+    "@tailwindcss/vite": "4.3.3",
+    "@types/node": "^24.19.2",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "electron": "44.5.1",
+    "esbuild": "^0.27.0",
+    "tsx": "^4.23.15",
+    "typescript": "5.8.3",
+    "vite": "7.3.6"
+  }
+}

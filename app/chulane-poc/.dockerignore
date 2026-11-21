@@ -1,0 +1,11 @@
+**
+!Dockerfile
+!dist/
+!dist/**
+!dist-host/
+!dist-host/web/
+!dist-host/web/main.mjs
+
+!dist-host/web-runtime/
+!dist-host/web-runtime/node_modules/
+!dist-host/web-runtime/node_modules/**

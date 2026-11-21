@@ -1,0 +1,14 @@
+# Add Chulane's six knowledge tools to the selected DeepSeek Harness profile.
+- insert:
+    - id: chulane-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: chulane
+        transport: stdio
+        command: !!js process.execPath
+        args:
+          - !!js process.env.CHULANE_MCP_ENTRY
+        env:
+          CHULANE_URL: !!js process.env.CHULANE_URL
+          CHULANE_ACCESS_KEY: !!js process.env.CHULANE_ACCESS_KEY
+          CHULANE_WORKSPACE: !!js process.env.CHULANE_WORKSPACE || '1'

@@ -1,0 +1,4 @@
+[submodule "app/chulane-poc/vendor/rivto"]
+	path = app/chulane-poc/vendor/rivto
+	url = https://github.com/MalchuL/rivto
+	branch = main

@@ -1,0 +1,8 @@
+{
+  "name": "@chulane/web-runtime",
+  "private": true,
+  "dependencies": {
+    "@mastra/core": "catalog:",
+    "zod": "catalog:"
+  }
+}
