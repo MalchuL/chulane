@@ -9,16 +9,18 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { serve } from '../../src/server/service.ts'
 
 const dir = await mkdtemp(join(tmpdir(), 'chulane-harness-'))
-const key = randomBytes(24).toString('hex')
-const host = await serve({ file: ':memory:', assets: resolve('dist'), editorKey: key })
+const password = randomBytes(24).toString('hex')
+const host = await serve({ file: ':memory:', assets: resolve('dist'), registration:true })
 const resultFile = join(dir, 'result.json')
 let child: ReturnType<typeof spawn> | undefined
 try {
-  const login = await fetch(host.url + '/api/login', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key }),
+  const login = await fetch(host.url + '/api/register', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({username:'Researcher',password}),
   })
   assert.equal(login.status, 200)
   const cookie = login.headers.get('set-cookie')!.split(';')[0]
+  const workspace=await fetch(host.url+'/api/workspaces',{method:'POST',headers:{Cookie:cookie,'Content-Type':'application/json'},body:JSON.stringify({name:'Harness acceptance'})})
+  assert.equal(workspace.status,200)
   const page = await fetch(host.url + '/api/pages', {
     method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({ title: 'Sandpiper notebook' }),
@@ -31,8 +33,8 @@ try {
     cwd: dir, stdio: ['ignore', 'ignore', 'inherit'],
     env: {
       PATH: process.env.PATH, HOME: dir, DSH_HOME: join(dir, 'profile'),
-      CHULANE_MCP_ENTRY: resolve('src/tools/mcp.ts'), CHULANE_URL: host.url,
-      CHULANE_PROBE_RESULT: resultFile, CHULANE_ACCESS_KEY: key,
+      CHULANE_MCP_ENTRY: resolve('src/tools/mcp.ts'), CHULANE_PROFILE: 'harness', CHULANE_PROFILE_HARNESS_URL: host.url,
+      CHULANE_PROBE_RESULT: resultFile, CHULANE_PROFILE_HARNESS_USERNAME:'Researcher', CHULANE_PROFILE_HARNESS_PASSWORD:password,
     },
   })
   let failure: Error | undefined
@@ -47,12 +49,14 @@ try {
     try { result = await readFile(resultFile, 'utf8') }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
   }
-  const [{ result: search }] = JSON.parse(result).results
+  const [{ result: search },{result:browse}] = JSON.parse(result).results
   assert.equal(search.isError, false)
   assert.deepEqual(JSON.parse(search.content[0].text), [
     { id: 1, title: 'Sandpiper notebook', url: host.url + '/?workspace=1&page=1' },
   ])
-  console.log('Published Harness discovered and executed Chulane search over MCP.')
+  assert.equal(browse.isError,false)
+  assert.deepEqual(JSON.parse(browse.content[0].text),{entries:[{id:1,kind:'page',name:'Sandpiper notebook'}],nextOffset:null})
+  console.log('Published Harness signed in with a named account, searched the workspace and browsed its root through MCP.')
 } finally {
   if (child?.pid && child.exitCode === null && child.signalCode === null) {
     const stopped = new Promise<void>(done => child!.once('close', () => done()))

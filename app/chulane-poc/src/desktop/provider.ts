@@ -25,13 +25,11 @@ export async function desktopProvider(dir:string):Promise<Provider>{
     await writeFile(temp,JSON.stringify(value),{mode:0o600})
     await rename(temp,file)
   }
-  return {get:()=>settings,async selectAgent(agent){
-    try{await checkLocalAgent(agent)}catch{
-      throw Object.assign(Error(agent==='codex'?'Install Codex CLI, run codex login and reopen Chulane from that terminal.':'Install and configure '+agent+' and make it available on PATH.'),{status:400})
-    }
+  return {get:()=>settings,checkAgent:checkLocalAgent,async selectAgent(agent){
+    await checkLocalAgent(agent)
     await persist({agent,model:settings.model,encrypted:encryptedKey})
     settings={...settings,agent}
-    return 'Connected to local '+agent+'.'
+    return agent==='hermes'?'Hermes chat CLI ready. Send a message to use its configured provider.':'Connected to local '+agent+'.'
   },async save(key,model){
     if(secure()){
       const encrypted=safeStorage.encryptString(key).toString('base64')

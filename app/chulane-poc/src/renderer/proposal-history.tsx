@@ -1,0 +1,60 @@
+/** Inspect completed external tool reviews without reissuing them. Stable result links open the affected page or block. */
+import {useEffect,useState} from 'react'
+import {History} from 'lucide-react'
+import type {ToolProposal,DecisionKind,DecisionPage,ProposalDecision} from '../shared/library'
+import type {Source} from '../shared/agent'
+import {json} from './api'
+import {Button,Dialog,DialogContent,DialogTitle,DialogTrigger} from './ui'
+
+const actions:Record<DecisionKind,string>={create:'Create page',rename:'Rename page',append:'Append paragraph',replace:'Edit block',page:'Page change'}
+type HistoryProps={ws:number;openSource:(source:Source)=>void}
+
+/** Keep the current destination and its stable ID visible alongside a changed original path. */
+export function ReviewDestination({id,original,shown}:{id:number|null;original:string|null;shown:string|null}){
+  if(id===null)return <>Workspace root</>
+  return <>{shown??'Folder unavailable'} · #{id}{original!==shown&&<> (requested as {original})</>}</>
+}
+
+/** Show the submitted destination and literal Markdown before and after the decision. */
+export function DraftPreview({draft,shown=draft.reviewedPath??draft.projectName}:{draft:NonNullable<ToolProposal['draft']>;shown?:string|null}){
+  return <div data-part="proposal-text"><div><small>Destination</small><p><ReviewDestination id={draft.project} original={draft.projectName} shown={shown}/></p></div>
+    <div><small>Markdown</small><p>{draft.markdown||'(empty page)'}</p></div></div>
+}
+
+/** Load one cursor at a time and discard responses if the user closes this history or leaves its workspace. */
+function Decisions({ws,openSource}:HistoryProps){
+  const [items,setItems]=useState<ProposalDecision[]>([]),[before,setBefore]=useState<number|null>(null)
+  const [next,setNext]=useState<number|null>(null),[loading,setLoading]=useState(true),[error,setError]=useState(''),[retry,setRetry]=useState(0)
+  useEffect(()=>{
+    let active=true
+    setLoading(true);setError('')
+    void json('proposals/history?workspace='+ws+(before===null?'':'&before='+before)).then((page:DecisionPage)=>{
+      if(active){setItems(current=>before===null?page.items:[...current,...page.items]);setNext(page.next)}
+    }).catch(err=>{if(active)setError(err.message)}).finally(()=>{if(active)setLoading(false)})
+    return ()=>{active=false}
+  },[ws,before,retry])
+  return <div data-part="decision-list"><ol>{items.map(item=><li key={item.id}>
+    <header><strong>{actions[item.kind]}</strong><span>{item.status==='approve'?'Approved':'Dismissed'}{item.reviewedBy&&' by '+item.reviewedBy}</span></header>
+    {item.page!==null?<a href={'?workspace='+ws+'&page='+item.page+(item.block?'&block='+encodeURIComponent(item.block):'')}
+      onClick={e=>{if(e.ctrlKey||e.metaKey||e.shiftKey||e.altKey)return;e.preventDefault();openSource({id:item.page!,title:item.title,block:item.block??undefined})}}>
+      {item.title} · #{item.page}</a>:<span>{item.title}</span>}
+    <small>Request #{item.id}{item.profile&&' · '+item.profile}{item.requestedBy&&' · Requested by '+item.requestedBy}{item.decidedAt&&<> · <time dateTime={item.decidedAt}>{new Date(item.decidedAt).toLocaleString()}</time></>}</small>
+    {item.draft&&<details><summary>Requested page</summary><DraftPreview draft={item.draft}/></details>}
+    {item.edit&&<details><summary>Requested text</summary><div data-part="proposal-text">
+      {item.edit.block&&<div><small>Before</small><p>{item.edit.before||'(empty)'}</p></div>}
+      <div><small>After</small><p>{item.edit.after||'(empty)'}</p></div></div></details>}
+  </li>)}</ol>
+  {loading?<small role="status">Loading decisions…</small>:error?<><p role="alert">{error}</p><Button size="sm" onClick={()=>setRetry(n=>n+1)}>Retry</Button></>
+    :!items.length?<p>No completed tool requests.</p>:next!==null&&<Button size="sm" variant="ghost" onClick={()=>setBefore(next)}>Older decisions</Button>}
+  </div>
+}
+
+/** Use the shared dialog trigger to retain keyboard focus on dismissal and fetch a fresh history on each opening. */
+export function ProposalHistory({ws,openSource}:HistoryProps){
+  const [open,setOpen]=useState(false)
+  return <Dialog open={open} onOpenChange={setOpen}><DialogTrigger asChild>
+    <Button size="icon-sm" variant="ghost" aria-label="Tool request history" title="Tool request history"><History/></Button>
+    </DialogTrigger><DialogContent aria-describedby={undefined}><DialogTitle>Tool request history</DialogTitle>
+      {open&&<Decisions key={ws} ws={ws} openSource={source=>{setOpen(false);openSource(source)}}/>}
+    </DialogContent></Dialog>
+}

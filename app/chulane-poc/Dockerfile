@@ -2,6 +2,8 @@
 FROM node:24-bookworm-slim
 WORKDIR /opt/chulane
 COPY dist-host/web-runtime/node_modules node_modules
+COPY src/server/workspace-database.ts src/server/workspace-database.ts
+COPY src/tools/backup.ts src/tools/backup.ts
 COPY dist dist
 COPY dist-host/web/main.mjs dist-host/web/main.mjs
 RUN mkdir /data && chown node:node /data

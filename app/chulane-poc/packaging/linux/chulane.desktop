@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Chulane
+Comment=Edit pages and organize knowledge
+Exec=chulane
+Icon=accessories-text-editor
+Terminal=false
+Categories=Office;

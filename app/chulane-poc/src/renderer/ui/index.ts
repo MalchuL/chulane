@@ -7,7 +7,7 @@ export { Separator } from "../../../vendor/rivto/packages/react-rivto-editor/src
 export { Badge } from "../../../vendor/rivto/packages/react-rivto-editor/src/components/ui/badge"
 export { Input } from "../../../vendor/rivto/packages/react-rivto-editor/src/components/ui/input"
 export { ToggleGroup, ToggleGroupItem } from "../../../vendor/rivto/packages/react-rivto-editor/src/components/ui/toggle-group"
-export { Dialog, DialogContent, DialogFooter, DialogTitle, DialogClose } from "../../../vendor/rivto/packages/react-rivto-editor/src/components/ui/dialog"
+export { Dialog, DialogTrigger, DialogContent, DialogFooter, DialogTitle, DialogClose } from "../../../vendor/rivto/packages/react-rivto-editor/src/components/ui/dialog"
 export { Popover, PopoverContent, PopoverTrigger } from "../../../vendor/rivto/packages/react-rivto-editor/src/components/ui/popover"
 export { Alert } from "./alert"
 export { Empty, EmptyHeader, EmptyTitle, EmptyDescription, EmptyContent } from "./empty"

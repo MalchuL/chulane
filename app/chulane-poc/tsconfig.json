@@ -42,6 +42,8 @@
       "@chulane/rivto-edgeless/*": [
         "./vendor/rivto/packages/rivto-edgeless/src/*.ts"
       ],
+      "@chulane/rivto-react/list-numbers": ["./vendor/rivto/packages/react-rivto-editor/src/extensions/built-ins/page/list/utils.ts"],
+      "@chulane/rivto-react/extensions": ["./vendor/rivto/packages/react-rivto-editor/src/extensions.ts"],
       "@chulane/rivto-react/block-factories": [
         "./vendor/rivto/packages/react-rivto-editor/src/block-factories.ts"
       ],

@@ -1,0 +1,179 @@
+/** Search an authorized desktop copy, including edits still awaiting delivery from this device. */
+import {YjsDoc} from '@chulane/crdt-doc'
+import {DocumentModelImpl} from '@chulane/document-model'
+import * as Y from 'yjs'
+import {exportPageMarkdown} from '../shared/markdown-export'
+import {documentText,literalQuery,matchingExcerpt} from '../shared/document-text'
+import type {Library} from '../shared/library'
+import type {TagTable,TaggedRow} from '../shared/tag-fields'
+import type {LibrarySearchHit,Source} from '../shared/agent'
+import {documentOutbox,withPendingLibrary} from './document-outbox'
+import {attachmentExcerpt,attachmentText,supportsAttachmentText} from '../shared/attachment-text'
+import {withWorkspaceCache} from './offline-server'
+import {attachmentFilename} from '../shared/attachment-filename'
+
+/** Merge only the writers this account can currently read into the last downloaded snapshot. */
+async function deviceState(snapshot:Response,replica:string,page:number,includeDrafts:boolean){
+  const base=new Uint8Array(await snapshot.arrayBuffer())
+  const updates=includeDrafts?(await documentOutbox(replica,page)).recovered.map(row=>row.state):[]
+  return updates.length?Y.mergeUpdates([...(base.length?[base]:[]),...updates]):base
+}
+
+/** Read the same merged writing projection for search, tag links and tag targets. */
+async function deviceDocumentText(snapshot:Response,replica:string,page:number,includeDrafts:boolean){
+  const doc=new Y.Doc()
+  let model:DocumentModelImpl|undefined
+  try{
+    const state=await deviceState(snapshot,replica,page,includeDrafts)
+    if(state.length)Y.applyUpdate(doc,state)
+    model=new DocumentModelImpl(new YjsDoc(String(page),doc))
+    return documentText(model)
+  }finally{if(model)await model.destroy();else doc.destroy()}
+}
+
+/** Scope each offline tag lookup to a current account, replica and active page snapshot. */
+async function withDeviceTagPages<T>(lib:Library,workspace:number,read:(catalog:Library,snapshot:(id:number)=>Promise<Response|undefined>,text:(state:Response,id:number)=>ReturnType<typeof deviceDocumentText>)=>Promise<T>){
+  const {profile,replica}=lib
+  if(!profile||!replica)throw Error('Local workspace copy is unavailable.')
+  return withWorkspaceCache(profile,workspace,replica,async(cache,catalog)=>{
+    const drafts=lib.role==='editor'&&catalog.role==='editor'
+    const active=new Set(catalog.pages.filter(page=>!page.deleted).map(page=>page.id))
+    return read(drafts?await withPendingLibrary(catalog,false):catalog,async id=>active.has(id)
+      ?cache.match(new URL('/api/pages/'+id+'/state?workspace='+workspace,location.origin)):undefined,
+      (state,id)=>deviceDocumentText(state,replica,id,drafts))
+  })
+}
+
+/** Export the authorized device copy and resolve links and the filename against its pending page titles. */
+export async function deviceMarkdown(lib:Library,workspace:number,id:number){
+  if(!lib.profile||!lib.replica)throw Error('Local workspace copy is unavailable.')
+  const replica=lib.replica
+  return withWorkspaceCache(lib.profile,workspace,replica,async(cache,catalog)=>{
+    const drafts=lib.role==='editor'&&catalog.role==='editor'
+    const library=drafts?await withPendingLibrary(catalog,false):catalog
+    const page=library.pages.find(item=>item.id===id&&!item.deleted)
+    if(!page)throw Error('Page unavailable.')
+    const state=await cache.match(new URL('/api/pages/'+id+'/state?workspace='+workspace,location.origin))
+    if(!state)throw Error('Open this page online to keep a copy on this device.')
+    const bytes=await deviceState(state,replica,id,drafts)
+    const linked=new Set(library.links.filter(link=>link.source===id).map(link=>link.target))
+    const result=exportPageMarkdown(bytes.length?bytes:null,page.plain,workspace,location.origin,library.pages.filter(item=>linked.has(item.id)),{
+      attachments:!!page.hasFiles,tagged:library.applications.some(item=>item.page===id),fields:!!page.hasFieldValues,
+    })
+    return {...result,title:page.title,metadataIncomplete:page.hasFiles===undefined||page.hasFieldValues===undefined}
+  })
+}
+
+/** List editable block identities from the copy displayed on the disconnected device. */
+export function deviceTagBlocks(lib:Library,workspace:number,page:number){
+  return withDeviceTagPages(lib,workspace,async(_catalog,snapshot,text)=>{
+    const state=await snapshot(page)
+    if(!state)throw Error('Open this page online to keep a copy on this device.')
+    return (await text(state,page)).blocks.map(block=>({...block,text:block.text.slice(0,120)}))
+  })
+}
+
+/** Resolve cached assignments against current device text, omitting missing pages and removed blocks. */
+function deviceTagTargets(lib:Library,workspace:number,tag:number,signal:AbortSignal){
+  return withDeviceTagPages(lib,workspace,async(catalog,snapshot,text)=>{
+    const sources:Source[]=[]
+    if(!catalog.tags.some(item=>item.id===tag&&!item.deleted))return {sources,fields:catalog.tagFields}
+    const targets=new Map<number,Set<string>>()
+    for(const item of catalog.applications){
+      if(item.tag!==tag)continue
+      const blocks=targets.get(item.page)??new Set<string>()
+      blocks.add(item.block)
+      targets.set(item.page,blocks)
+    }
+    for(const {id,title} of catalog.pages){
+      signal.throwIfAborted()
+      const wanted=targets.get(id)
+      if(!wanted)continue
+      const state=await snapshot(id)
+      if(!state)continue
+      if(wanted.delete(''))sources.push({id,title})
+      if(wanted.size)for(const block of (await text(state,id)).blocks){
+        if(wanted.has(block.id))sources.push({id,title,block:block.id,excerpt:block.text.slice(0,120)||'Empty block'})
+      }
+    }
+    return {sources,fields:catalog.tagFields}
+  })
+}
+
+/** Follow tag links using the latest downloaded and pending document state. */
+export async function deviceTagSources(lib:Library,workspace:number,tag:number,signal:AbortSignal){
+  return (await deviceTagTargets(lib,workspace,tag,signal)).sources
+}
+
+/** Join field values only to objects that the signed-in device can currently open. */
+export async function deviceTagTable(lib:Library,workspace:number,tag:number,signal:AbortSignal):Promise<TagTable>{
+  const {sources,fields}=await deviceTagTargets(lib,workspace,tag,signal)
+  if(!fields)throw Error('Reconnect to download the tag field values.')
+  const rows:TaggedRow[]=sources.map(source=>({...source,values:{}}))
+  const targets=new Map(rows.map(row=>[row.id+'/'+(row.block??''),row]))
+  for(const cell of fields.cells){
+    if(cell.tag!==tag)continue
+    const row=targets.get(cell.page+'/'+cell.block)
+    if(row)row.values[cell.field]=cell.value
+  }
+  return {fields:fields.columns.filter(column=>column.tag===tag),rows}
+}
+
+/** Merge cached and pending Yjs snapshots for a read. The account lock and abort signal bound the scan. */
+export function searchDevicePages(profile:string,workspace:number,replica:string,write:boolean,query:string,signal:AbortSignal){
+  const literal=literalQuery(query)
+  return withWorkspaceCache(profile,workspace,replica,async(cache,catalog,keys)=>{
+    const includeDrafts=write&&catalog.role==='editor'
+    const library=includeDrafts?await withPendingLibrary(catalog,false):catalog
+    const states=new Map<number,Request>()
+    const files=new Map<number,{id:number;key:Request}[]>()
+    for(const key of keys){
+      const path=new URL(key.url).pathname
+      const file=/^\/api\/pages\/(\d+)\/files\/(\d+)$/.exec(path)
+      if(file){
+        const page=Number(file[1]),entries=files.get(page)??[]
+        entries.push({id:Number(file[2]),key})
+        files.set(page,entries)
+      }
+      const match=/^\/api\/pages\/(\d+)\/state$/.exec(path)
+      if(match)states.set(Number(match[1]),key)
+    }
+    const hits:LibrarySearchHit[]=[]
+    for(const page of library.pages){
+      signal.throwIfAborted()
+      if(page.deleted)continue
+      const source:LibrarySearchHit={id:page.id,title:page.title}
+      const key=states.get(page.id),snapshot=key&&await cache.match(key)
+      if(snapshot){
+        const {blocks,canvasText}=await deviceDocumentText(snapshot,replica,page.id,includeDrafts)
+        for(const block of blocks){
+          source.excerpt=matchingExcerpt(block.text,literal)
+          if(source.excerpt){source.block=block.id;break}
+        }
+        if(!source.excerpt){
+          source.excerpt=matchingExcerpt(canvasText,literal)
+          if(source.excerpt)source.surface='canvas'
+        }
+        if(!source.excerpt&&literal.test(page.title))
+          source.excerpt=blocks.find(block=>block.text)?.text.slice(0,160)??''
+
+      }else source.excerpt=matchingExcerpt(page.plain,literal)
+      // Match the server’s file order regardless of download order.
+      for(const file of (files.get(page.id)??[]).sort((a,b)=>a.id-b.id)){
+        signal.throwIfAborted()
+        const response=await cache.match(file.key)
+        const name=response&&attachmentFilename(response)
+        if(!response||!name||!supportsAttachmentText(name))continue
+        const text=attachmentText(name,new Uint8Array(await response.arrayBuffer()))
+        const match=text&&attachmentExcerpt(text,literal)
+        if(match){
+          const hit={id:file.id,name,...match}
+          if(source.attachment)(source.additionalAttachments??=[]).push(hit)
+          else source.attachment=hit
+        }
+      }
+      if(source.excerpt||source.attachment||literal.test(page.title))hits.push(source)
+    }
+    return hits
+  })
+}

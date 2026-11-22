@@ -1,4 +1,4 @@
-# Add Chulane's six knowledge tools to the selected DeepSeek Harness profile.
+# Add Chulane's knowledge tools to the selected DeepSeek Harness profile.
 - insert:
     - id: chulane-mcp
       name: '@deepseek-ai/dsh-mcp-client'
@@ -8,7 +8,8 @@
         command: !!js process.execPath
         args:
           - !!js process.env.CHULANE_MCP_ENTRY
-        env:
-          CHULANE_URL: !!js process.env.CHULANE_URL
-          CHULANE_ACCESS_KEY: !!js process.env.CHULANE_ACCESS_KEY
-          CHULANE_WORKSPACE: !!js process.env.CHULANE_WORKSPACE || '1'
+        # Pass just the connection selected for this MCP process.
+        env: !!js >-
+          Object.fromEntries(Object.entries(process.env).filter(([key]) =>
+            key === 'CHULANE_PROFILE' || ['URL', 'ACCESS_KEY', 'USERNAME', 'PASSWORD', 'WORKSPACE'].some(field =>
+              key === (process.env.CHULANE_PROFILE ? 'CHULANE_PROFILE_' + process.env.CHULANE_PROFILE.toUpperCase() + '_' : 'CHULANE_') + field)))
