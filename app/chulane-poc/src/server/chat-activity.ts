@@ -3,8 +3,8 @@ import type {DatabaseSync} from 'node:sqlite'
 import type {ChatActivity} from '../shared/agent.ts'
 
 export type ActivityEvent=
-  | {type:'reasoning'|'commentary';key:string;text:string}
-  | {type:'reasoning-end'|'commentary-end';key:string}
+  | {type:'reasoning'|'commentary'|'progress';key:string;text:string}
+  | {type:'reasoning-end'|'commentary-end'|'progress-end';key:string}
   | {type:'tool-start';key:string;name:string;input:unknown}
   | {type:'tool-end';key:string;result?:unknown;failed?:boolean}
 
@@ -20,21 +20,22 @@ export function chatActivity(db:DatabaseSync,message:number,notify:(part:ChatAct
   let count=0
   const save=db.prepare('UPDATE chat_messages SET activity=json_set(activity,?,json(?)) WHERE id=?')
   return (event:ActivityEvent,offset:number)=>{
-    const kind=event.type.startsWith('tool')?'tool':event.type.startsWith('commentary')?'commentary':'reasoning'
-    const key=kind+'/'+event.key
+    // Start, delta and end records for the same activity share a kind and provider key.
+    const key=event.type.split('-')[0]+'/'+event.key
     let part=open.get(key)
     if(!part){
-      if(count>=128||(event.type!=='reasoning'&&event.type!=='commentary'&&event.type!=='tool-start'))return
+      if(count>=128||(!('text' in event)&&event.type!=='tool-start'))return
+      const kind=event.type==='tool-start'?'tool':event.type
       part={id:count++,offset,revision:0,kind,state:'running',detail:'',
-        name:event.type==='tool-start'?event.name:event.type==='commentary'?'Agent update':'Thinking',input:event.type==='tool-start'?preview(event.input):''}
+        name:event.type==='tool-start'?event.name:kind==='reasoning'?'Thinking':'Agent update',input:event.type==='tool-start'?preview(event.input):''}
       open.set(key,part)
     }
     let detailOffset:number|undefined
-    if(event.type==='reasoning'||event.type==='commentary'){
+    if('text' in event){
       if(part.detail.length>=16000)return
       detailOffset=part.detail.length
       part.detail+=event.text.slice(0,16000-part.detail.length)
-    }else if(event.type==='tool-end'||event.type==='reasoning-end'||event.type==='commentary-end'){
+    }else if(event.type!=='tool-start'){
       if(event.type==='tool-end')part.detail=event.failed?'Tool call failed.':preview(event.result)
       part.state=event.type==='tool-end'&&event.failed?'failed':'done'
       open.delete(key)

@@ -1300,11 +1300,16 @@ if(provider==='codex'){
     await expect(streaming.locator('strong').filter({hasText:'live'})).toBeVisible()
     await expect(streaming).not.toContainText('completed.')
     if(agent==='codex'){
-      await expect(streaming.getByText('Reading your field note.',{exact:true})).toBeVisible()
+      const trace=streaming.getByRole('group',{name:'Agent activity'}).filter({hasText:'Agent update'})
+      const update=trace.getByRole('button',{name:/Agent update/})
+      await update.focus()
+      await update.press('Enter')
+      await expect(trace.getByText('Reading your field note.',{exact:true})).toBeVisible()
+      await expect(streaming.locator('[data-slot=trace]').getByText(/two entries|live field note/)).toHaveCount(0)
       await expect(streaming.locator('strong').filter({hasText:'two entries'})).toBeVisible()
     }
     if(agent!=='hermes'){
-      await streaming.getByRole('button',{name:'Thinking',exact:true}).click()
+      await streaming.getByRole('button',{name:/^Thinking/}).click()
       await expect(streaming).toContainText('Checking the notebook.')
     }
     await writeFile(join(dir,'release-'+agent),'')
@@ -1389,8 +1394,8 @@ if(provider==='codex'){
     const pid=Number(await readFile(waitingPid,'utf8'))
     await expect(side.locator('article').last()).toContainText('I will check the project list.')
     const turn=side.locator('article').last()
-    await turn.getByRole('button',{name:'Thinking',exact:true}).click()
-    await expect(turn.getByRole('region',{name:'Thinking'})).toContainText('Checking the supplied page context.')
+    await turn.getByRole('button',{name:/^Thinking/}).click()
+    await expect(turn.getByRole('group',{name:'Agent activity'}).filter({hasText:'Thinking'})).toContainText('Checking the supplied page context.')
     if(end==='stop')await side.getByRole('button',{name:'Stop response'}).click()
     else{
       await local.reload()
@@ -1398,8 +1403,8 @@ if(provider==='codex'){
     }
     await expect(interrupted).toHaveCount(previousInterruptions+1)
     if(end==='reload'){
-      await turn.getByRole('button',{name:'Thinking',exact:true}).click()
-      await expect(turn.getByRole('region',{name:'Thinking'})).toContainText('Checking the supplied page context.')
+      await turn.getByRole('button',{name:/^Thinking/}).click()
+      await expect(turn.getByRole('group',{name:'Agent activity'}).filter({hasText:'Thinking'})).toContainText('Checking the supplied page context.')
     }
     await expect.poll(()=>{
       try{process.kill(pid,0);return true}catch(error){if((error as NodeJS.ErrnoException).code==='ESRCH')return false;throw error}

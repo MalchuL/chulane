@@ -140,7 +140,7 @@ h1,h2 { min-width:0; overflow-wrap:anywhere; }
 .agent-review ins {color:#254f40;background:#edf7f1;text-decoration:none}
 [data-part=review-disclosure]>button {gap:.25rem;font-size:.8rem}
 [data-part=review-disclosure]>button[aria-expanded=true] svg {transform:rotate(90deg)}
-[data-part=review-disclosure] [data-part=scroll-area]{max-height:min(18rem,40dvh)}
+:is([data-part=review-disclosure],[data-slot=trace-collapsible-content]) [data-part=scroll-area]{max-height:min(18rem,40dvh)}
 [data-part=decision-list] :is(time,li>small,li>a,li>span){user-select:text}
 .agent-review pre {white-space:pre-wrap;overflow-wrap:anywhere}
 .agent-review footer {flex-wrap:wrap}

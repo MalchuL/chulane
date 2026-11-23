@@ -36,7 +36,7 @@ export function localReplyStream(agent:LocalAgent,step:number,publish:(delta:str
   function publishProgress(item:NonNullable<typeof progress>){
     const value=item.phase==='partial_answer'&&item.source.trimStart().startsWith('{')?messagePrefix(item.source):item.source
     if(!value.trim()||value.length<=item.shown)return
-    activity?.({type:'commentary',key:step+'/'+item.id,text:value.slice(item.shown)})
+    activity?.({type:item.phase==='commentary'?'progress':'commentary',key:step+'/'+item.id,text:value.slice(item.shown)})
     item.shown=value.length
   }
   function consume(line:string){
@@ -55,7 +55,7 @@ export function localReplyStream(agent:LocalAgent,step:number,publish:(delta:str
         publishProgress(progress)
       }else if(record.method==='item/completed'&&item?.type==='agentMessage'&&isProgress){
         publishProgress({id:item.id,phase:item.phase,source:item.text,shown:progress&&progress.id===item.id?progress.shown:0})
-        activity?.({type:'commentary-end',key:step+'/'+item.id});progress=undefined
+        activity?.({type:item.phase==='commentary'?'progress-end':'commentary-end',key:step+'/'+item.id});progress=undefined
       }else if(record.method==='item/agentMessage/delta'&&params.itemId===answerItem&&typeof params.delta==='string'){
         source+=params.delta;update(messagePrefix(source))
       }else if(record.method==='item/completed'&&item?.type==='agentMessage'){
