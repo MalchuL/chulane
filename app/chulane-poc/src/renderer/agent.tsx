@@ -25,7 +25,7 @@ import type {AppliedEdit,Chat,Conversation,EditPreview,Source} from '../shared/a
 
 type Settings={canSavePlugin:boolean;hasApiKey:boolean;agent?:LocalAgent;localAgents:LocalAgent[];configured:boolean;configurable:boolean;model:string;chats:Chat[]}
 export type ApplyInEditor=(page:number,commit:()=>Promise<AppliedEdit>)=>Promise<void>
-type Props={permissionScope:string;surface:'canvas'|'page';receiveEdit:(edit:AppliedEdit)=>Promise<void>;pageLabel:(page:Pick<Source,'id'|'title'>)=>string;destinationPath:(id:number|null)=>string|null;openProject:(id:number)=>Promise<void>;downloadAttachment:(page:number,file:{id:number;name:string})=>Promise<void>;ws:number;pages:Source[];page?:Source;write:boolean;offline:boolean;visible:boolean;close:()=>void;open:(source:EditorTarget,signal?:AbortSignal)=>Promise<void>;checkpoint:(sources?:readonly number[],signal?:AbortSignal)=>Promise<void>;applyPageEdit:ApplyInEditor}
+type Props={permissionScope:string;surface:'canvas'|'page';receiveEdit:(edit:AppliedEdit)=>Promise<void>;pageLabel:(page:Pick<Source,'id'|'title'>)=>string;destinationPath:(id:number|null)=>string|null;openProject:(id:number)=>Promise<void>;downloadAttachment:(page:number,file:{id:number;name:string})=>Promise<void>;ws:number;pages:Source[];page?:Source;write:boolean;offline:boolean;visible:boolean;close:()=>void;open:(source:EditorTarget,signal?:AbortSignal)=>Promise<void>;checkpoint:(sources:readonly number[],signal?:AbortSignal)=>Promise<void>;applyPageEdit:ApplyInEditor}
 /** Label saved citations using only the titles and destinations recorded in this answer. */
 function labeledCitations(sources:Source[]){
   const pages=new Map(sources.map(source=>[source.id,source.title]))
@@ -82,7 +82,8 @@ export function AgentSidebar({permissionScope,surface,receiveEdit,pageLabel,dest
   const composer=useRef<HTMLTextAreaElement>(null),log=useRef<HTMLDivElement>(null),follow=useRef(true)
   const attachedIds=new Set(attachments.map(source=>source.id))
   const missingPage=[...attachments,...blockLinks].some(source=>!pageById.has(source.id))
-  const {ref:dropRef,isDropTarget}=useDroppable({id:CHAT_COMPOSER,accept:[PAGE_REFERENCE,BLOCK_REFERENCE],disabled:!visible||!write||busy})
+  const panel=useRef<HTMLElement>(null)
+  const {isDropTarget}=useDroppable({id:CHAT_COMPOSER,element:panel,accept:[PAGE_REFERENCE,BLOCK_REFERENCE],disabled:!visible||!write||busy})
   /** Keep an explicit attachment even while it is also the active document. */
   function addPage(id:number){
     const item=pageById.get(id)
@@ -94,12 +95,13 @@ export function AgentSidebar({permissionScope,surface,receiveEdit,pageLabel,dest
     P(false);N('')
   }
   /** Merge references from either the keyboard grip or a completed composer drop. */
-  function addBlockLinks(incoming:BlockSource[]){
-    if(!visible||!write||busy)return
+  function addBlockLinks(incoming:BlockSource[],hit?:Element){
+    if(!visible||!write||busy||!incoming.length||(hit&&!panel.current?.contains(hit)))return false
     const unique=new Map([...blockLinks,...incoming].map(s=>[s.id+'/'+s.block,s]))
-    if(unique.size>MAX_BLOCK_LINKS){N('A message can include up to '+MAX_BLOCK_LINKS+' block links.');return}
+    if(unique.size>MAX_BLOCK_LINKS){N('A message can include up to '+MAX_BLOCK_LINKS+' block links.');return false}
     updateDraft({blockLinks:[...unique.values()]});N('')
     composer.current?.focus()
+    return true
   }
   useImperativeHandle(useContext(BlockLinkComposer),()=>addBlockLinks)
   useDragDropMonitor({
@@ -306,12 +308,13 @@ export function AgentSidebar({permissionScope,surface,receiveEdit,pageLabel,dest
     await load(chat)
   }
   async function decide(edit:EditPreview,choice:'apply'|'dismiss',reviewedTitle?:string){
-    if(choice==='apply'&&edit.kind==='canvas'&&(page?.id!==edit.page||surface!=='canvas'))await open({id:edit.page,surface:'canvas'})
-    else await checkpoint()
+    if(choice==='apply'){
+      if(edit.kind==='canvas'&&(page?.id!==edit.page||surface!=='canvas'))await open({id:edit.page,surface:'canvas'})
+      await checkpoint([edit.page])
+    }
     await submitReview('edits',edit.id,choice,reviewedTitle===undefined?undefined:{reviewedTitle},choice==='apply'&&edit.kind!=='rename'?edit.page:undefined)
   }
   function act(fn:()=>Promise<unknown>){E('');void fn().catch(e=>E(e.message))}
-  const panel=useRef<HTMLElement>(null)
   if(!visible)return null
   const providerCard=settings&&<section data-part="provider-card">
         <strong><Settings2 size={15}/>Provider setup</strong>
@@ -437,7 +440,7 @@ export function AgentSidebar({permissionScope,surface,receiveEdit,pageLabel,dest
     <footer data-part="compose-area">
     {offline?<small role="status">{write?'Reconnect to send a message.':'Reconnect to load shared conversations.'}</small>:(error||refreshError)&&<ErrorAlert message={error||refreshError}/>}
     {notice&&<small role="status">{notice}</small>}
-    {write?<form aria-label="Chat composer" ref={dropRef} data-part="composer" data-drag={isDropTarget?'over':dragging?'ready':'idle'} onSubmit={e=>{e.preventDefault();void send()}}>
+    {write?<form aria-label="Chat composer" data-part="composer" data-drag={busy?'disabled':isDropTarget?'over':dragging?'ready':'idle'} onSubmit={e=>{e.preventDefault();void send()}}>
       <span className="sr-only" role="status" aria-label="Attached context">
         {attachments.length} {attachments.length===1?'page':'pages'} and {blockLinks.length} {blockLinks.length===1?'block link':'block links'} attached.
       </span>

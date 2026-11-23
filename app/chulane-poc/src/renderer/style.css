@@ -1,5 +1,7 @@
 /* The workspace holds navigation and document commands. Rivto owns the editing surface. */
 @import "./tokens.css";
+@import "@liqui-design/glass/styles.css";
+@import "./glass.css";
 :root { font:16px/1.5 var(--ui); color:var(--ink); background:var(--paper); }
 /* Keep rem-based document geometry stable. Personal type sizes belong to the workspace and its portals. */
 body { font-size:var(--app-size,1rem); }
@@ -151,8 +153,8 @@ h1,h2 { min-width:0; overflow-wrap:anywhere; }
 .agent-panel [data-part=compose-area] {padding:10px 14px max(10px,env(safe-area-inset-bottom));display:grid;gap:5px}
 .agent-panel [data-part=composer] {padding:10px;border:1px solid var(--rule);border-radius:13px;background:var(--paper)}
 .agent-panel [data-part=composer]:focus-within {border-color:var(--focus)}
-.agent-panel [data-drag=ready] {outline:2px dashed var(--focus);outline-offset:2px}
-.agent-panel [data-drag=over] {outline:2px solid var(--accent);background:var(--rail)}
+.agent-panel [data-drag=ready],:where([data-block-drag-active]) .agent-panel [data-drag=idle] {outline:2px dashed var(--focus);outline-offset:2px}
+.agent-panel [data-drag=over],:where([data-block-drag-active]) .agent-panel:hover [data-drag=idle] {outline:2px solid var(--accent);background:var(--rail)}
 .agent-panel [data-part=context] {display:flex;flex-wrap:wrap;align-items:center;gap:4px;overflow-wrap:anywhere}
 .agent-panel [data-part=context]>small:first-child {margin-right:3px}
 .agent-panel [data-part=context]>button,.agent-panel [data-part=context]>[data-slot=badge] {max-width:100%;overflow:hidden;text-overflow:ellipsis;height:23px;padding:1px 6px;font-size:11px}

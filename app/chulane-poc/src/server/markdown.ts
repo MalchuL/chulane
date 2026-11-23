@@ -4,7 +4,8 @@ import {pageCreation} from '../shared/page-draft.ts'
 import type {DatabaseSync} from 'node:sqlite'
 import {activeProject,reviewProjectPath} from './projects.ts'
 import {paragraphBlockFactory,separatorBlockFactory} from '@chulane/rivto-react/block-factories'
-import {markdownSyntax,markdownFormat,tableMarkdownFormat} from '../shared/markdown-format.ts'
+import {markdownSyntax,tableMarkdownFormat} from '../shared/markdown-format.ts'
+import {markMarkdownReferences} from '../shared/named-references.ts'
 import {toMarkdown} from 'mdast-util-to-markdown'
 import {createHash,randomUUID} from 'node:crypto'
 import {fromMarkdown,type CompileContext} from 'mdast-util-from-markdown'
@@ -98,8 +99,10 @@ function importedBlock(type:string,content:string,children:Block[]=[]):Block{
   return {id:randomUUID(),type,content,children,props:{},pluginData:{},listProps:{}}
 }
 
+type MarkdownParagraph=Extract<ReturnType<typeof fromMarkdown>['children'][number],{type:'paragraph'}>
+
 /** Import an outline only when each item fits a Markdown writing block followed by nested lists. */
-function importList(node:Extract<ReturnType<typeof fromMarkdown>['children'][number],{type:'list'}>,markdown:string,paragraph:string):Block[]|undefined{
+function importList(node:Extract<ReturnType<typeof fromMarkdown>['children'][number],{type:'list'}>,markdown:string,paragraph:string,wrapped:WeakMap<MarkdownParagraph,string>):Block[]|undefined{
   if(node.ordered&&node.start!==1)return
   const offset=node.position!.start.offset!
   // CommonMark permits up to nine digits before the ordered delimiter.
@@ -111,7 +114,7 @@ function importList(node:Extract<ReturnType<typeof fromMarkdown>['children'][num
     let checked:boolean|undefined
     for(const part of item.children){
       if(part.type==='list'){
-        const outline=importList(part,markdown,paragraph)
+        const outline=importList(part,markdown,paragraph,wrapped)
         if(!outline)return
         for(const child of outline)children.push(child)
         continue
@@ -119,20 +122,14 @@ function importList(node:Extract<ReturnType<typeof fromMarkdown>['children'][num
       // A Rivto block displays its writing before its children. Keep interleaved source in its original order.
       if(part.type!=='paragraph'||children.length)return
       const position=part.position!
-      const source=markdown.slice(position.start.offset,position.end.offset)
+      const source=wrapped.get(part)??markdown.slice(position.start.offset,position.end.offset)
       const marker=/^\[([ xX])\](?:[ \t]+|(?=[\r\n]|$))/
       const match=paragraphs.length===0?marker.exec(source):null
       if(match){
         if(node.ordered)return
         checked=match[1]!==' '
       }
-      let content=match?source.slice(match[0].length):source
-      if(position.start.line!==position.end.line){
-        // The parser removes structural indentation, including lazy continuations and nested markers.
-        const [first,...rest]=part.children
-        const inline=match&&first?.type==='text'?[{...first,value:first.value.replace(marker,'')},...rest]:part.children
-        content=toMarkdown({...part,children:inline},markdownFormat).slice(0,-1).replace(/\r\n?/g,'\n')
-      }
+      const content=match?source.slice(match[0].length):source
       paragraphs.push(content)
     }
     const block=importedBlock(paragraph,paragraphs.join('\n\n'),children)
@@ -147,12 +144,13 @@ function importList(node:Extract<ReturnType<typeof fromMarkdown>['children'][num
 }
 
 /** Expand short GFM rows while preserving the source of aligned, overflowing or extremely sparse tables. */
-function importTable(node:Extract<ReturnType<typeof fromMarkdown>['children'][number],{type:'table'}>){
+function importTable(node:Extract<ReturnType<typeof fromMarkdown>['children'][number],{type:'table'}>,source:string){
   const columns=node.children[0]!.children.length
   if(node.align?.some(Boolean)||node.children.some(row=>row.children.length>columns))return
   // Bound the number of allocated editor cells by the source size so a sparse table cannot expand quadratically.
   const sourceLength=node.position!.end.offset!-node.position!.start.offset!
   if(node.children.length*columns>sourceLength)return
+  markMarkdownReferences(node,source)
   const rows=node.children.map(row=>{
     const cells=Array.from({length:columns},(_,index)=>{
       const cell=row.children[index]
@@ -167,7 +165,16 @@ function importTable(node:Extract<ReturnType<typeof fromMarkdown>['children'][nu
 /** Create independent editable blocks from top-level constructs. Preserve document-wide reference definitions together. */
 export function importMarkdown(markdown:string){
   const lines=markdown.replace(/\r\n?/g,'\n').split('\n')
-  const nodes=fromMarkdown(markdown,markdownSyntax).children
+  const wrapped=new WeakMap<MarkdownParagraph,string>()
+  const nodes=fromMarkdown(markdown,{...markdownSyntax,mdastExtensions:[...markdownSyntax.mdastExtensions,{exit:{
+    paragraph(token){
+      const node=this.stack.at(-1)
+      // The parser's token stream omits list indentation and retains escapes, entities and hard breaks.
+      if(node?.type==='paragraph'&&this.stack.at(-2)?.type==='listItem'&&token.start.line!==token.end.line)
+        wrapped.set(node,this.sliceSerialize(token).replace(/\r\n?/g,'\n'))
+      this.exit(token)
+    }
+  }}]}).children
   const references=new Map<string,{start:number;end:number}>()
   /** Rivto resolves a reference within one block. Track its top-level span even inside lists and quotes. */
   function collect(node:CompileContext['stack'][number],index:number){
@@ -189,14 +196,14 @@ export function importMarkdown(markdown:string){
     for(let next=start+1;next<=end;next++)end=Math.max(end,ends[next]!)
     const node=nodes[start]!
     if(start===end&&node.type==='list'){
-      const items=importList(node,markdown,paragraph)
+      const items=importList(node,markdown,paragraph,wrapped)
       if(items){
         for(const item of items)parts.push(item)
         start=end+1
         continue
       }
     }
-    const table=start===end&&node.type==='table'?importTable(node):undefined
+    const table=start===end&&node.type==='table'?importTable(node,markdown):undefined
     if(table)parts.push(table)
     else if(start===end&&node.type==='thematicBreak'){
       parts.push(importedBlock(separatorBlockFactory.createEmptyBlock().type,''))

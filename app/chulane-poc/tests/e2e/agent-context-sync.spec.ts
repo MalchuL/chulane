@@ -1,5 +1,5 @@
-/** A provider must receive the device's latest linked writing, including after the source pane closes. */
-import {chromium,expect} from '@playwright/test'
+/** Exercise host synchronization for linked agent context and pending document approvals in an account workspace. */
+import {chromium,expect,firefox} from '@playwright/test'
 import {resolve} from 'node:path'
 import {serve} from '../../src/server/service.ts'
 
@@ -7,9 +7,13 @@ const received:string[][]=[]
 const host=await serve({file:':memory:',assets:resolve('dist'),registration:true,
   provider:{get:()=>({key:'fixture',model:'fixture'})},backgroundEnvironment:{async run(turn){
     received.push(turn.referencedBlocks.map(block=>block.text))
+    if(turn.history.at(-1)?.content==='Review this document'&&turn.current){
+      const target=turn.tools.read(turn.current.id,0)
+      turn.tools.propose!(target.id,target.blocks[0].id,'Reviewed summary')
+    }
     turn.publish('Reviewed the linked writing.')
   }}})
-const browser=await chromium.launch()
+const browser=await (process.env.CHULANE_TEST_BROWSER==='firefox'?firefox:chromium).launch()
 try{
   const page=await browser.newPage({viewport:{width:1500,height:900}})
   async function create(route:string,data:object){
@@ -20,17 +24,44 @@ try{
   await create('register',{username:'writer',password:'fixture-passphrase'})
   const workspace=await create('workspaces',{name:'Survey'})
   const scope='?workspace='+workspace.id
-  const source=await create('pages'+scope,{title:'Measurements',content:'First reading'})
+  const source=await create('pages/import-markdown'+scope,{title:'Measurements',content:'- First reading\n  - Second reading'})
   const current=await create('pages'+scope,{title:'Report',content:'Summary'})
+  const request=await create('proposals'+scope,{page:current.id,edit:{block:'@import',before:'Summary',after:'External review'}})
   await page.goto(host.url+'/'+scope+'&page='+source.id)
   await page.getByRole('button',{name:'Split right'}).click()
   await page.getByRole('navigation',{name:'Library',exact:true}).getByRole('button',{name:'Report',exact:true}).click()
   await page.getByRole('button',{name:'Agent',exact:true}).click()
   const side=page.getByRole('complementary',{name:'Workspace agent'})
   const sourcePane=page.locator('article[data-source-page="'+source.id+'"]:visible')
-  const field=sourcePane.locator('[data-block-content]').first()
+  const fields=sourcePane.locator('[data-block-content]'),field=fields.first()
+  const ids=()=>fields.evaluateAll(nodes=>nodes.map(node=>node.closest('[data-block-id]')?.getAttribute('data-block-id')))
   await expect(field).toHaveText('First reading')
-  await sourcePane.getByRole('button',{name:'Attach block links to chat'}).first().click()
+  const originalIds=await ids()
+  await field.hover()
+  const grip=sourcePane.locator('.block-handle').first()
+  const history=side.getByRole('log',{name:'Chat messages'})
+  await grip.hover()
+  await page.mouse.down()
+  await history.hover()
+  await expect(page.locator('.rivto-block-drag-preview')).toBeVisible()
+  await page.keyboard.press('Escape')
+  await page.mouse.up()
+  await expect(side.getByRole('button',{name:/Remove block link:/})).toHaveCount(0)
+  await grip.dragTo(history)
+  await expect(side.getByRole('button',{name:'Remove block link: First reading'})).toBeVisible({timeout:2500})
+  await expect(side.getByLabel('Message the agent')).toBeFocused()
+  await side.getByRole('button',{name:'Remove block link: First reading'}).click()
+  const first=(await field.boundingBox())!,second=(await fields.nth(1).boundingBox())!
+  await page.mouse.move(first.x+8,first.y+first.height/2)
+  await page.mouse.down()
+  await page.mouse.move(second.x+24,second.y+second.height/2,{steps:10})
+  await page.mouse.up()
+  await expect(sourcePane.locator('[data-block-selected=true]')).toHaveCount(2)
+  await grip.dragTo(side.getByLabel('Message the agent'))
+  await expect(side.getByRole('button',{name:/Remove block link:/})).toHaveCount(2,{timeout:2500})
+  await expect(fields).toHaveText(['First reading','Second reading'])
+  expect(await ids()).toEqual(originalIds)
+  await side.getByRole('button',{name:'Remove block link: Second reading'}).click()
   const stateRoute='**/api/pages/'+source.id+'/state?**'
   const interruptSync=()=>page.route(stateRoute,route=>route.request().method()==='GET'?route.continue():route.fulfill({status:503,json:{error:'Source sync is offline'}}))
   await interruptSync()
@@ -70,5 +101,35 @@ try{
   await send.click()
   await expect.poll(()=>received).toEqual([['Revised reading'],[]])
   await expect(composer).toHaveValue('')
+  const targetRoute='**/api/pages/'+current.id+'/state?**'
+  const targetField=page.locator('article[data-source-page="'+current.id+'"]:visible [data-block-content]').first()
+  const decisions:string[]=[]
+  page.on('request',request=>{
+    if(request.method()==='POST'&&/\/(approve|apply)\?/.test(request.url()))decisions.push(request.url())
+  })
+  const chatApply=side.getByRole('button',{name:'Apply',exact:true})
+  await expect(chatApply).toBeVisible()
+  await page.route(targetRoute,route=>route.request().method()==='GET'?route.continue():route.fulfill({status:503,json:{error:'Report sync is offline'}}))
+  await targetField.fill('Writer’s latest summary')
+  await chatApply.click()
+  await expect(alert).toContainText('Report sync is offline')
+  await expect(chatApply).toBeEnabled()
+  await page.getByRole('button',{name:'Review 1 pending request'}).click()
+  const requests=page.getByRole('region',{name:'Requests to review'})
+  const approve=requests.getByRole('button',{name:'approve',exact:true})
+  await approve.click()
+  await expect(page.locator('[data-part=workspace-toast][data-error]')).toContainText('Report sync is offline')
+  expect(decisions).toEqual([])
+  const dismissed=page.waitForResponse(response=>response.url().includes('/proposals/'+request.pending+'/dismiss?')&&response.ok())
+  await Promise.all([dismissed,requests.getByRole('button',{name:'dismiss',exact:true}).click()])
+  await page.keyboard.press('Escape')
+  await page.unroute(targetRoute)
+  await chatApply.click()
+  await expect(alert).toContainText('target block changed')
+  await expect(targetField).toHaveText('Writer’s latest summary')
+  expect(decisions).toHaveLength(1)
+  await side.getByRole('button',{name:'Dismiss',exact:true}).click()
+  await expect(chatApply).toHaveCount(0)
+  console.log('Chat and workspace approvals waited for target sync. Dismissal remained available and retry preserved the writer’s edit.')
   console.log('An unsynced linked block blocked delivery from open and closed panes, then reached the agent once with its latest text.')
 }finally{await browser.close();await host.close()}

@@ -1,0 +1,140 @@
+diff --git a/packages/react-rivto-editor/src/extensions/block-drag/types.ts b/packages/react-rivto-editor/src/extensions/block-drag/types.ts
+index bc9027fb..3453302a 100644
+--- a/packages/react-rivto-editor/src/extensions/block-drag/types.ts
++++ b/packages/react-rivto-editor/src/extensions/block-drag/types.ts
+@@ -1,6 +1,6 @@
+ import type { EditorBlock as Block } from "@chulane/rivto";
+ import type { ReactNode } from "react";
+-import type { BlockDragTargetScope, ResolvedBlockDropTarget } from "@chulane/rivto-page";
++import type { BlockDragAdapter, BlockDragTargetScope, ResolvedBlockDropTarget } from "@chulane/rivto-page";
+ import type { CrossDocumentBlockPanel } from "./cross-document/panel";
+ 
+ /** Live receiving attachment using canonical Page geometry in either surface. */
+@@ -33,4 +33,6 @@ export interface PageDragExtensionOptions {
+   /** Shared by synchronously replicated views. Defaults to the editor's model object. */
+   readonly documentIdentity?: string;
+   readonly activationDistance?: number;
++  /** Consume an external drop without changing the document hierarchy. */
++  readonly dropOutside?: BlockDragAdapter["dropOutside"];
+ }
+diff --git a/packages/react-rivto-editor/src/surfaces/page/page-block-drag.ts b/packages/react-rivto-editor/src/surfaces/page/page-block-drag.ts
+index 5dce912b..300f4d40 100644
+--- a/packages/react-rivto-editor/src/surfaces/page/page-block-drag.ts
++++ b/packages/react-rivto-editor/src/surfaces/page/page-block-drag.ts
+@@ -41,6 +41,7 @@ export class PageBlockDrag implements BlockDragAdapter {
+   constructor(
+     private readonly panel: CrossDocumentBlockPanel,
+     private readonly documentIdentity: object | string = panel.document.getDocument(),
++    readonly dropOutside?: BlockDragAdapter["dropOutside"],
+   ) {}
+ 
+   /**
+diff --git a/packages/react-rivto-editor/src/surfaces/page/page-drag-boundary.tsx b/packages/react-rivto-editor/src/surfaces/page/page-drag-boundary.tsx
+index 97faa9ed..386cd418 100644
+--- a/packages/react-rivto-editor/src/surfaces/page/page-drag-boundary.tsx
++++ b/packages/react-rivto-editor/src/surfaces/page/page-drag-boundary.tsx
+@@ -23,14 +23,14 @@ export interface PageDragBoundaryProps extends Omit<PageDragExtensionOptions, "c
+  * @param props.activationDistance - Pointer travel in CSS pixels before activation.
+  * @returns The same subtree with optional pointer dragging installed after commit.
+  */
+-export function PageDragBoundary({ children, activationDistance = 4, documentIdentity }: PageDragBoundaryProps) {
++export function PageDragBoundary({ children, activationDistance = 4, documentIdentity, dropOutside }: PageDragBoundaryProps) {
+   const { reactPanel } = useReactPanelContext();
+   const { element } = useEditorRoot();
+   useLayoutEffect(() => {
+     if (!element) {
+       return;
+     }
+-    const drag = new PageBlockDrag(reactPanel, documentIdentity);
++    const drag = new PageBlockDrag(reactPanel, documentIdentity, dropOutside);
+     const detach = drag.attach(element, reactPanel.page.dropTargets);
+     try {
+       const stop = reactPanel.page.extensions.register(
+@@ -58,6 +58,6 @@ export function PageDragBoundary({ children, activationDistance = 4, documentIde
+       }
+       throw error;
+     }
+-  }, [reactPanel, element, activationDistance, documentIdentity]);
++  }, [reactPanel, element, activationDistance, documentIdentity, dropOutside]);
+   return <PageDragContext.Provider value={true}>{children}</PageDragContext.Provider>;
+ }
+diff --git a/packages/rivto-page/src/editor/drag-and-drop/block-drag-extension.ts b/packages/rivto-page/src/editor/drag-and-drop/block-drag-extension.ts
+index 608c6da6..b1571f09 100644
+--- a/packages/rivto-page/src/editor/drag-and-drop/block-drag-extension.ts
++++ b/packages/rivto-page/src/editor/drag-and-drop/block-drag-extension.ts
+@@ -23,6 +23,8 @@ export interface BlockDragPreviewRow {
+ 
+ /** Host-owned transactional move; Page never writes hierarchy directly. */
+ export interface BlockDragAdapter {
++  /** Offer selected block IDs to a host surface outside the editor on explicit release. A consumer owns focus. */
++  dropOutside?(ids: readonly string[], hit: Element): boolean;
+   /**
+    * Captures a bounded text preview once when a pointer gesture activates.
+    *
+@@ -110,10 +112,10 @@ export class BlockDragSources {
+    *
+    * @param data - Host selection and actual parent lookup.
+    * @param activeId - Identity whose handle started the gesture.
++   * @param selection - Selection captured when dragging began.
+    * @returns Captured unique roots; each parent lookup is independent of the viewport.
+    */
+-  static get(data: BlockDragSourceData, activeId: string): readonly string[] {
+-    const selection = data.selection.get();
++  static get(data: BlockDragSourceData, activeId: string, selection = data.selection.get()): readonly string[] {
+     if (
+       !BlockSelectionRanges.isStructuralSelection(selection) ||
+       !selection?.blocks.some(({ id }) => id === activeId)
+@@ -151,6 +153,7 @@ interface BlockDragGesture {
+   x: number;
+   y: number;
+   ids?: readonly string[];
++  sourceSelection?: ReturnType<BlockEditorSelection["get"]>;
+   selected?: ReadonlySet<string>;
+   preview?: HTMLElement;
+   readonly feedback: BlockDropFeedback;
+@@ -400,7 +403,8 @@ class BlockDragController {
+         ) {
+           return "handled";
+         }
+-        gesture.ids = BlockDragSources.get(this.editor.adapter, gesture.activeId);
++        gesture.sourceSelection = this.editor.adapter.selection.get();
++        gesture.ids = BlockDragSources.get(this.editor.adapter, gesture.activeId, gesture.sourceSelection);
+         gesture.selected = new Set(gesture.ids);
+       }
+       event.preventDefault();
+@@ -439,13 +443,25 @@ class BlockDragController {
+       return "continue";
+     }
+     const errors: unknown[] = [];
+-    let focusRoot = gesture.root;
++    let focusRoot: HTMLElement | undefined = gesture.root;
+     try {
+       const target = this.releaseTarget(gesture, event);
+       if (target && gesture.ids) {
+         if (this.adapter.moveBlocks(gesture.ids, target.destination, target.scope)) {
+           focusRoot = target.scope?.root ?? gesture.root;
+         }
++      } else if (gesture.ids && event.type === "pointerup" && this.adapter.dropOutside) {
++        const hit = gesture.root.ownerDocument.elementFromPoint(event.clientX, event.clientY);
++        if (hit && !gesture.root.contains(hit)) {
++          // Moving a parent carries its children. An external reference needs each explicitly selected ID.
++          const selection = gesture.sourceSelection?.blocks;
++          const ids = selection?.some(({ id }) => id === gesture.activeId)
++            ? selection.map(({ id }) => id)
++            : gesture.ids;
++          if (this.adapter.dropOutside(ids, hit)) {
++            focusRoot = undefined;
++          }
++        }
+       }
+     } catch (error) {
+       errors.push(error);
+@@ -456,7 +472,7 @@ class BlockDragController {
+       errors.push(error);
+     }
+     try {
+-      if (gesture.ids && focusRoot.isConnected) {
++      if (gesture.ids && focusRoot?.isConnected) {
+         focusRoot.focus({ preventScroll: true });
+       }
+     } catch (error) {

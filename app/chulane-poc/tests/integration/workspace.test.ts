@@ -2453,3 +2453,25 @@ test('append creates an editable canvas card, and full access moves or removes i
     assert.equal(catalog.pages.find(p=>p.title==='Notes')?.project,project)
   }finally{model.destroy()}
 })
+
+for(const format of ['wrapped checklist','table cell'] as const){
+  test('Markdown '+format+' keeps page references and literal hashtags after export and reimport',async t=>{
+    const {create,request,library}=await workspace(t)
+    const prose=String.raw`[Survey map] and [[Tide book]] #field \#scratch &#35;private [Web #label](https://example.org)`+' `#sample`'
+    const content=format==='table cell'?'| Observation |\n| --- |\n| '+prose+' |':'- [ ] Survey\r\n  '+prose+'\r\n  - Next visit'
+    const original=await create('pages/import-markdown',{title:'Observations',content})
+    const check=async(page:number)=>{
+      const catalog=await library()
+      assert.deepEqual(catalog.namedReferences?.filter(ref=>ref.source===page).map(ref=>ref.name).sort(),['Survey map','Tide book'])
+      assert.deepEqual(catalog.tags.map(tag=>tag.name),['field'])
+      const assignments=catalog.applications.filter(item=>item.page===page)
+      assert.equal(assignments.length,1)
+      assert.ok(assignments[0]!.block)
+    }
+    await check(original)
+    const exported=await(await request('pages/'+original+'/markdown')).json()
+    const copy=await create('pages/import-markdown',{title:'Restored observations',content:exported.markdown})
+    await check(copy)
+    assert.equal((await(await request('pages/'+copy+'/markdown')).json()).markdown,exported.markdown)
+  })
+}

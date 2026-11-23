@@ -11,6 +11,9 @@ export type NamedReference={kind:'page'|'tag';name:string}
 export const referenceSyntax={extensions:[gfm()],mdastExtensions:[gfmFromMarkdown()]}
 const tokens=/(?<![!\[\]])(?:\[\[([^\[\]\r\n]+)\]\]|\[([^\[\]\r\n]+)\])(?![\[(\]])|(?<![\p{L}\p{M}\p{N}_/#])#([\p{L}\p{M}\p{N}_-]+)/gu
 
+// A masked hash before a tag character needs an explicit escape when its text node is serialized.
+const exchangeTokens=new RegExp(tokens.source+'|\u0000(?=[\\p{L}\\p{M}\\p{N}_-])',tokens.flags)
+
 /** Match source escapes against the parser's decoded text, including stripped list and quote prefixes. */
 function literalText(value:string,raw:string){
   if(value===raw)return value
@@ -26,35 +29,38 @@ function literalText(value:string,raw:string){
 }
 
 /** Share the exact same recognition and exclusions between preview and committed document metadata. */
-function visitReferences(tree:Root,source:string,emit:(ref:NamedReference)=>void,address?:(ref:NamedReference)=>string){
+function visitReferences(tree:Node,source:string,emit:(ref:NamedReference,label:string)=>Inline|void,escaped?:(value:string)=>Inline){
   function visit(node:Node){
     if(!('children' in node)||node.type==='link'||node.type==='linkReference')return
-    for(let i=0;i<node.children.length;i++){
-      const child=node.children[i]!
-      if(child.type!=='text'){visit(child);continue}
-      if(!/[#\[]/.test(child.value))continue
+    node.children=node.children.flatMap((child):Root['children'][number]|Inline[]=>{
+      if(child.type!=='text'){visit(child);return child}
+      if(!/[#\[]/.test(child.value))return child
       // Rivto file macros can leave surrounding prose in synthetic text nodes without source positions.
       const raw=child.position?source.slice(child.position.start.offset,child.position.end.offset):child.value
       const pieces:Inline[]=[]
       let end=0
-      for(const match of literalText(child.value,raw).matchAll(tokens)){
-        const kind=match[3]?'tag':'page'
-        const name=match[3]?.normalize('NFC')??(match[2]??match[1]!).trim()
-        if(!name||name.length>(kind==='tag'?100:250)||/[\p{Cc}]/u.test(name))continue
-        emit({kind,name})
-        if(!address)continue
+      for(const match of literalText(child.value,raw).matchAll(escaped?exchangeTokens:tokens)){
         const start=match.index!
+        const label=child.value.slice(start,start+match[0].length)
+        let replacement:Inline|void
+        if(match[0]==='\0'){
+          if(label!=='#')continue
+          replacement=escaped?.(label)
+        }else{
+          const kind=match[3]?'tag':'page'
+          const name=match[3]?.normalize('NFC')??(match[2]??match[1]!).trim()
+          if(!name||name.length>(kind==='tag'?100:250)||/[\p{Cc}]/u.test(name))continue
+          replacement=emit({kind,name},label)
+        }
+        if(!replacement)continue
         if(start>end)pieces.push({type:'text',value:child.value.slice(end,start)})
         end=start+match[0].length
-        pieces.push({type:'link',url:address({kind,name}),children:[{type:'text',value:child.value.slice(start,end)}],
-          data:{hProperties:{'data-chulane-reference':kind,'data-reference-name':name,tabIndex:0}}})
+        pieces.push(replacement)
       }
-      if(pieces.length){
-        if(end<child.value.length)pieces.push({type:'text',value:child.value.slice(end)})
-        node.children.splice(i,1,...pieces)
-        i+=pieces.length-1
-      }
-    }
+      if(!pieces.length)return child
+      if(end<child.value.length)pieces.push({type:'text',value:child.value.slice(end)})
+      return pieces
+    })
   }
   visit(tree)
 }
@@ -83,13 +89,23 @@ export function allowsReferenceCompletion(source:string,offset:number){
 /** Return references from one block, whose Markdown definitions and fences are locally scoped. */
 export function namedReferences(source:string){
   const result:NamedReference[]=[]
-  if(/[#\[]/.test(source))visitReferences(fromMarkdown(source,referenceSyntax),source,ref=>result.push(ref))
+  if(/[#\[]/.test(source))visitReferences(fromMarkdown(source,referenceSyntax),source,ref=>{result.push(ref)})
   return result
 }
 
 /** Decorate the idle preview without writing Markdown links back into the editor or its undo history. */
 export function remarkNamedReferences(workspace:number,page:number){
   const base='?'+new URLSearchParams({workspace:String(workspace),page:String(page)})
-  return ()=>(tree:Root,file:{value:unknown})=>visitReferences(tree,String(file.value),()=>{},
-    ref=>base+'&'+new URLSearchParams({[ref.kind==='tag'?'refTag':'refPage']:ref.name}))
+  return ()=>(tree:Root,file:{value:unknown})=>visitReferences(tree,String(file.value),({kind,name},label)=>({
+    type:'link',url:base+'&'+new URLSearchParams({[kind==='tag'?'refTag':'refPage']:name}),
+    children:[{type:'text',value:label}],data:{hProperties:{'data-chulane-reference':kind,'data-reference-name':name,tabIndex:0}}
+  }))
+}
+
+/** Mark active delimiters for the table writer. Flattened code, HTML and definitions remain literal. */
+export function markMarkdownReferences(tree:Node,source:string,literal=false){
+  visitReferences(tree,source,({kind},value)=>{
+    if(literal&&kind==='page')return
+    return {type:'text',value,chulaneSpelling:literal?'escaped':kind}
+  },value=>({type:'text',value,chulaneSpelling:'escaped'}))
 }

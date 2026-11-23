@@ -200,5 +200,22 @@ try{
   await page.getByRole('navigation',{name:'Library',exact:true}).getByRole('button',{name:'Tidal notes',exact:true}).click()
   await expect(page.getByRole('heading',{name:'Tidal notes',exact:true})).toBeVisible()
   await expect(page.getByRole('navigation',{name:'Referenced by'})).toHaveCount(0)
+  const notebook=await post('pages/import-markdown'+scope,{title:'Table of tides',content:[
+    '| Reference | Fieldwork |','| --- | --- |',String.raw`| [[Harbor diagram]] | #ebb and \#literal |`,'',
+    '- [ ] Visit the inlet','  and read [Tidal notes].',
+  ].join('\n')})
+  const exported=await(await page.request.get(host.url+'/api/pages/'+notebook.id+'/markdown'+scope)).json()
+  const copy=await post('pages/import-markdown'+scope,{title:'Restored tides',content:exported.markdown})
+  await page.goto(host.url+'/'+scope+'&page='+copy.id)
+  const previews=page.locator('article.doc:visible .markdown-preview')
+  await expect(previews.getByRole('link',{name:'#ebb',exact:true})).toBeVisible()
+  await expect(previews.getByRole('link',{name:'#literal',exact:true})).toHaveCount(0)
+  await expect(previews.getByRole('link',{name:'[Tidal notes]',exact:true})).toBeVisible()
+  await previews.getByRole('link',{name:'#ebb',exact:true}).press('Enter')
+  await expect(page.getByRole('heading',{name:'#ebb',exact:true}).first()).toBeVisible()
+  await page.goto(host.url+'/'+scope+'&page='+copy.id)
+  await previews.getByRole('link',{name:'[[Harbor diagram]]',exact:true}).press('Enter')
+  await expect(page.getByRole('heading',{name:'Harbor diagram',exact:true})).toBeVisible()
+  console.log('Reimported table and checklist references rendered and opened their target.')
   console.log('Page and block references, internal navigation and backlink removal passed.')
 }finally{await browser.close();await host.close();await rm(dir,{recursive:true,force:true})}

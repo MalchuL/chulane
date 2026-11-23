@@ -7,6 +7,7 @@ import {gfmTable} from 'micromark-extension-gfm-table'
 import {gfmTableFromMarkdown} from 'mdast-util-gfm-table'
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import {namedReferences,referenceSyntax} from '../../src/shared/named-references.ts'
 import {agentDocument} from '../../src/server/agent-document.ts'
 import {importMarkdown,exportMarkdown} from '../../src/server/markdown.ts'
 
@@ -231,6 +232,25 @@ test('linked page titles stay literal when they contain Markdown or line breaks'
   assert.deepEqual(link.children.map(node=>node.type==='text'&&node.value),[title.replace('\n',' ')])
 })
 
+test('importing exported labels only creates references from intentional writing',async()=>{
+  const {exportPageMarkdown}=await import('../../src/shared/markdown-export.ts')
+  const doc=new Y.Doc(),model=new DocumentModelImpl(new YjsDoc('literal-labels',doc))
+  try{
+    model.blocks.insertBlock({type:'paragraph',content:'See [Expedition] #survey'})
+    model.elements.insertElement({type:'text',frame:{x:0,y:0,width:120,height:50},zIndex:0,
+      props:{text:'Station #north\n[Map #east] [[Island]]'}})
+    const state=Y.encodeStateAsUpdate(doc)
+    for(const origin of [null,'https://example.test']){
+      const {markdown}=await exportPageMarkdown(state,'',2,origin,[{id:8,title:'[Lost] #route',deleted:1}],
+        {page:7,files:[{id:4,name:'[Photo] #scan.pdf'}],hasFiles:true,tagged:false,fields:false})
+      const restored=agentDocument({id:9,title:'Imported',state:importMarkdown(markdown),plain:''})
+      assert.deepEqual(restored.blocks.flatMap(block=>namedReferences(block.text)),[
+        {kind:'page',name:'Expedition'},{kind:'tag',name:'survey'}
+      ])
+    }
+  }finally{await model.destroy()}
+})
+
 test('Markdown checklists import as independently editable checkbox blocks',async()=>{
   const source='- [ ] Pack **camera**\n- [X] Charge battery'
   const doc=new Y.Doc()
@@ -403,5 +423,34 @@ test('a loose checklist retains paragraph boundaries, inline marks and editable 
     }
     const interleaved='- Parent\n  - Child\n\n  Follow-up after the child'
     assert.equal(exportMarkdown(importMarkdown(interleaved),'',false).markdown,interleaved)
+  }finally{await model.destroy()}
+})
+
+test('table exchange keeps a pipe in a named page title, a colon after it, and the fragment of an ordinary link',()=>{
+  const cell=String.raw`[North\|West]: see https://example.org/harbor#east and &#35;sample`
+  const first=importMarkdown('| Notes |\n| --- |\n| '+cell+' |')
+  const exported=exportMarkdown(first,'',false)
+  for(const state of [first,importMarkdown(exported.markdown)]){
+    const writing=agentDocument({id:1,title:'Survey',state,plain:''}).blocks.at(-1)!.text
+    assert.deepEqual(namedReferences(writing),[{kind:'page',name:'North|West'}])
+    const [paragraph]=fromMarkdown(writing,referenceSyntax).children
+    assert.ok(paragraph?.type==='paragraph')
+    assert.deepEqual(paragraph.children.flatMap(node=>node.type==='link'?[node.url]:[]),['https://example.org/harbor#east'])
+  }
+})
+
+test('table export retains Chulane references inside a heading and keeps indented code literal',async()=>{
+  const doc=new Y.Doc(),model=new DocumentModelImpl(new YjsDoc('formatted-reference-cells',doc))
+  try{
+    model.blocks.insertBlock({type:'table',children:[{type:'table-row',children:[
+      {type:'table-cell',content:'# Read **[Field notes]** #tide'},
+      {type:'table-cell',content:'    [Not a page] #sample'},
+    ]}]})
+    const exported=exportMarkdown(Y.encodeStateAsUpdate(doc),'',false)
+    assert.deepEqual(exported.omitted,['block formatting in table cells'])
+    const cells=agentDocument({id:1,title:'Fieldwork',plain:'',state:importMarkdown(exported.markdown)}).blocks.slice(-2)
+    assert.deepEqual(cells.map(cell=>namedReferences(cell.text)),[
+      [{kind:'page',name:'Field notes'},{kind:'tag',name:'tide'}],[]
+    ])
   }finally{await model.destroy()}
 })

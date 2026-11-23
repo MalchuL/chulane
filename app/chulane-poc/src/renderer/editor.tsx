@@ -18,7 +18,7 @@ import {remarkNamedReferences} from '../shared/named-references'
 import {InlineTagSurface} from './inline-tags'
 import type {ViewHandle} from './editor-dock'
 import {EditorAddress,type EditorTarget} from './editor-address'
-import {blockLinkExtension} from './block-links'
+import {BlockLinkComposer,blockLinkExtension,blockSources} from './block-links'
 import {initialJournalState} from '../shared/journal-state'
 import {documentOutbox,localJournalDay,writingText} from './document-outbox'
 import {pageFiles} from './page-files'
@@ -45,6 +45,7 @@ export function Editor({view,surfaceMode,installation,onFileAdded,citationTarget
   const mode=view?.mode??surfaceMode
   const surfaceAnchor=useRef<HTMLSpanElement>(null)
   const currentTitle=useRef(title);currentTitle.current=title
+  const chat=React.useContext(BlockLinkComposer)
   const saveNow=useRef<()=>void>(()=>{})
   useEffect(()=>{
     const doc=new Y.Doc(),path='pages/'+id+'/state?workspace='+workspace
@@ -125,7 +126,9 @@ export function Editor({view,surfaceMode,installation,onFileAdded,citationTarget
           editor=createDocumentEditor({document:model})
           reactEditor=createReactEditor({editor,extensions:[
             standardPreset(),pageFiles({workspace,page:id,installation,writable,headers:replicaHeaders,added:onFileAdded}),todoItemExtension(),tableExtension(),kanbanExtension(),columnsExtension(),bentoExtension(),
-            blockLinkExtension,...(writable?[pageDragExtension({documentIdentity})]:[]),...edgelessPreset()
+            blockLinkExtension,...(writable?[pageDragExtension({documentIdentity,dropOutside(ids,hit){
+              return id>0&&(chat?.current?.(blockSources({id,title:currentTitle.current},ids,model.blocks),hit)??false)
+            }})]:[]),...edgelessPreset()
           ]})
           releaseBlocks=mountPluginBlocks(reactEditor,message=>report?.(message))
           doc.on('update',(_bytes,origin)=>{if(writable&&!remote&&origin!==peerOrigin){dirty=true;unpublished=true;queueBackup();wake();window.addEventListener('beforeunload',unload);setStatus('Unsaved changes')}})
@@ -215,7 +218,7 @@ export function Editor({view,surfaceMode,installation,onFileAdded,citationTarget
     const poll=setInterval(sync,POLL_INTERVAL_MS)
     const autosave=setTimeout(()=>saveNow.current(),AUTOSAVE_DELAY_MS)
     return ()=>{room.leave();disposed=true;unwatch?.();clearTimeout(wakeTimer);clearTimeout(timer);void backup()?.catch(()=>{});applyInEditor.current=null;checkpoint.current=null;failed?.(new Error('Page closed'));clearInterval(poll);clearTimeout(autosave);saveNow.current=()=>{};window.removeEventListener('beforeunload',unload);releaseBlocks?.();reactEditor?.destroy();if(editor)void editor.destroy().finally(()=>model.destroy());else doc.destroy()}
-  },[id,workspace,writable,replica,installation,mode])
+  },[id,workspace,writable,replica,installation,mode,chat])
   useEffect(()=>{
     if(!runtime||!citationTarget)return
     const surface=surfaceAnchor.current?.closest('[data-source-page]')

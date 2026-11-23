@@ -49,7 +49,22 @@ export function useDeviceTheme(profile:string){
   },[key])
   const theme=saved?.key===key?saved.theme:null
   const draft=preview?.key===key?preview.theme:null
-  const applied=activeTheme(draft&&themeSchema.safeParse(draft).success?draft:theme)
+  const current=draft&&themeSchema.safeParse(draft).success?draft:theme
+  const applied=activeTheme(current)
+  const [opaquePreference]=useState(()=>matchMedia('(prefers-reduced-transparency: reduce), (prefers-contrast: more), (forced-colors: active)'))
+  const [opaque,setOpaque]=useState(opaquePreference.matches)
+  useEffect(()=>{
+    const update=()=>setOpaque(opaquePreference.matches)
+    opaquePreference.addEventListener('change',update)
+    update()
+    return ()=>opaquePreference.removeEventListener('change',update)
+  },[opaquePreference])
+  const material=current?.material??'auto'
+  const glass=saved?.key===key&&!opaque&&(material==='glass'||(material==='auto'&&(current?.preset??'chulane')==='chulane'))
+  useLayoutEffect(()=>{
+    document.documentElement.toggleAttribute('data-glass',glass)
+    return ()=>document.documentElement.removeAttribute('data-glass')
+  },[glass])
   useLayoutEffect(()=>{
     if(!applied)return
     const root=document.documentElement,{application,editor,accent}=applied
@@ -72,7 +87,7 @@ export function useDeviceTheme(profile:string){
     else localStorage.removeItem(key)
     setSaved({key,theme});setError('')
   }
-  return {theme,draft,save,edit:(value:DeviceTheme|null)=>setPreview(value?{key,theme:value}:undefined),ready:saved?.key===key,error}
+  return {theme,draft,save,glass,edit:(value:DeviceTheme|null)=>setPreview(value?{key,theme:value}:undefined),ready:saved?.key===key,error}
 }
 
 type AppearanceProps=ReturnType<typeof useDeviceTheme>
@@ -84,7 +99,7 @@ export function Appearance({theme,draft,edit,save,ready,error}:AppearanceProps){
   const manual=preset==='custom'||preset==='chulane'
   /** Fork the displayed tokens on explicit customization. Simply selecting a preset preserves the personal copy. */
   function customize(patch:Partial<ThemeTokens>){
-    edit({...values,...patch,preset:'custom'})
+    edit({...values,...patch,preset:'custom',material:draft?.material??'auto'})
   }
   async function commit(value:DeviceTheme|null){
     setBusy(true)
@@ -103,6 +118,11 @@ export function Appearance({theme,draft,edit,save,ready,error}:AppearanceProps){
           <NativeSelectOption value="chulane">{themeNames.chulane}</NativeSelectOption>
           <optgroup label="Hallmark"><NativeSelectOption value="ink">{themeNames.ink}</NativeSelectOption><NativeSelectOption value="terminal">{themeNames.terminal}</NativeSelectOption></optgroup>
           <NativeSelectOption value="custom">{themeNames.custom}</NativeSelectOption>
+        </NativeSelect></label>
+        <label>Surface style<NativeSelect value={draft.material} onChange={e=>edit({...draft,material:e.target.value as DeviceTheme['material']})}>
+          <NativeSelectOption value="auto">Theme default</NativeSelectOption>
+          <NativeSelectOption value="glass">Liquid glass</NativeSelectOption>
+          <NativeSelectOption value="solid">Solid</NativeSelectOption>
         </NativeSelect></label>
         {manual?<>
           {(['application','editor'] as const).map(scope=>{

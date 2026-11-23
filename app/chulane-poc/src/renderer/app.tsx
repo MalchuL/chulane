@@ -2,6 +2,7 @@
 import React,{useCallback,useEffect,useMemo,useRef,useState} from 'react'
 import {createRoot} from 'react-dom/client'
 import {flushSync} from 'react-dom'
+import {LiquiGlass} from '@liqui-design/glass'
 import {Copy,Inbox,HardDrive,CloudDownload,LogOut,Archive,BookOpen,Globe,Hash,Link2,CalendarDays,Folder,Plus,Trash2,Search,FileText,Paperclip,Check,ArrowDownToLine,FolderPlus,FolderInput,PanelLeft,Layers,Upload,X,Ellipsis,MessageSquareText,RotateCcw,Pencil} from 'lucide-react'
 import {defaultPreset,PreventSelection} from '@dnd-kit/dom'
 import {DragDropProvider} from '@dnd-kit/react'
@@ -407,9 +408,8 @@ function App(){
     const editors=[...views.current.values(),...journalEditors.current.values()]
     await Promise.all(editors.filter(view=>!sources||sources.has(view.page)).map(view=>view.checkpoint.current?.(destination)))
   }
-  /** The provider reads the host copy. Include queued edits from an attached page even after its pane closed. */
-  async function checkpointAgent(sources?:readonly number[],signal=AbortSignal.timeout(30000)){
-    if(!sources)return saveEditors()
+  /** Sync host reads and approval targets, including edits queued after a pane closed. */
+  async function syncAgentPages(sources:readonly number[],signal=AbortSignal.timeout(30000)){
     const pages=new Set(sources)
     if(!pages.size)return
     await saveEditors('server',pages)
@@ -709,6 +709,10 @@ function App(){
     const draft=proposal.draft
     const review=choice==='dismiss'?undefined:!draft?{reviewedTitle}
       :'day' in draft?{reviewedDay:draft.day}:{reviewedPath:destinationPath(draft.project)}
+    if(choice==='approve'){
+      if(proposal.page!==null)await syncAgentPages([proposal.page])
+      else await saveEditors()
+    }
     const commit=()=>json('proposals/'+proposal.id+'/'+choice+suffix,'POST',review)
     if(choice==='approve'&&proposal.edit&&proposal.page!==null){
       await applyPageEdit(proposal.page,commit)
@@ -840,7 +844,7 @@ function App(){
         <div><small>After</small><p>{proposal.edit.after||'(empty)'}</p></div></div>}
       </ScrollArea>}
       {occupied&&<p>This date already has a journal entry. Dismiss this request and review the existing page before editing it.</p>}
-      {(['approve','dismiss'] as const).map(choice=><Button variant="ghost" size="sm" key={choice} disabled={choice==='approve'&&((proposal.page!==null&&!target)||occupied||(!!proposal.draft&&'project' in proposal.draft&&proposal.draft.project!==null&&destinationPath(proposal.draft.project)===null))} onClick={()=>afterSave(()=>decideProposal(proposal,choice,target?.title))}>{choice}</Button>)}</Alert>})}
+      {(['approve','dismiss'] as const).map(choice=><Button variant="ghost" size="sm" key={choice} disabled={choice==='approve'&&((proposal.page!==null&&!target)||occupied||(!!proposal.draft&&'project' in proposal.draft&&proposal.draft.project!==null&&destinationPath(proposal.draft.project)===null))} onClick={()=>act(()=>decideProposal(proposal,choice,target?.title))}>{choice}</Button>)}</Alert>})}
     </ScrollArea></SettingsPanel>
   const layoutKey=JSON.stringify(['chulane-editor-layout-v1',lib.installation,lib.profile??lib.role,lib.replica,ws])
   return <Toast.Provider swipeDirection="right"><InlineTagsContext.Provider value={{pages:lib.pages,namedReferences:lib.namedReferences,workspace:ws,pageLabel,searchBlocks,openNamed,open:openSource,tags:lib.tags,report:E,apply:lib.offline?undefined:async(page,block,choice)=>{
@@ -848,7 +852,9 @@ function App(){
     await refresh()
   }}}><BlockLinkComposer.Provider value={blockComposer}><DragDropProvider plugins={referenceDragPlugins}><div className={'app'+(agentOpen?' agent-open':'')+(mobile?' menu-open':'')}>
     <nav ref={rail} tabIndex={-1} id="library-navigation" className="rail" aria-label="Library"><SidebarHandle side="library" report={E}/>
-    <ScrollArea className={railListsClass} role="region" aria-label="Library navigation lists" tabIndex={0}><div data-part="rail-navigation"><div className="brand"><Layers size={23}/> Chulane</div><Label className="sr-only" htmlFor="workspace-select">Workspace</Label><div className="workspace-switcher"><NativeSelect id="workspace-select" title={workspace} value={ws} onChange={e=>{const next=Number(e.target.value);afterSave(()=>chooseWorkspace(next))}}>{lib.workspaces.map(w=><NativeSelectOption key={w.id} value={w.id}>{w.name}</NativeSelectOption>)}</NativeSelect>
+    <ScrollArea className={railListsClass} role="region" aria-label="Library navigation lists" tabIndex={0}><div data-part="rail-navigation"><div className="brand"><Layers size={23}/> Chulane</div><Label className="sr-only" htmlFor="workspace-select">Workspace</Label><div className="workspace-switcher">
+      {appearance.glass&&<LiquiGlass data-part="workspace-lens" aria-hidden="true" radius={12} specular={.32} edgeShade={.08} hairline={.08} refraction={14} bezel={6} dispersion={0} blur={.5} frost={.12}/>}
+      <NativeSelect id="workspace-select" title={workspace} value={ws} onChange={e=>{const next=Number(e.target.value);afterSave(()=>chooseWorkspace(next))}}>{lib.workspaces.map(w=><NativeSelectOption key={w.id} value={w.id}>{w.name}</NativeSelectOption>)}</NativeSelect>
     {lib.owner&&lib.profile&&<WorkspaceMembers key={ws} workspace={ws} offline={lib.offline} changed={refresh}/>}
     {lib.archivedWorkspaces&&<Popover><PopoverTrigger asChild><Button variant="ghost" size="icon-sm" aria-label="Manage workspace archive" title="Manage workspace archive"><Archive/></Button></PopoverTrigger>
       <PopoverContent>{lib.owner&&<Button variant="ghost" onClick={()=>afterSave(async()=>{
@@ -967,7 +973,7 @@ function App(){
         const view=mounted.find(view=>view.active)??mounted[0]
         const apply=view?.apply.current??journalEditor(edit.page)?.apply.current
         if(apply)await apply(edit.page,async()=>edit)
-      }} pageLabel={pageLabel} destinationPath={destinationPath} openProject={async project=>{await saveEditors();const data=await refresh();if(!data.projects.some(item=>item.id===project&&item.trashRoot===null))throw Error('Project is unavailable');navigate(String(project))}} key={ws} downloadAttachment={downloadAttachment} pages={lib.pages.filter(p=>!p.deleted)} ws={ws} page={currentDocument} write={!!write} offline={!!lib.offline} visible={agentOpen} close={()=>setAgentOpen(false)} open={openSource} applyPageEdit={applyPageEdit} checkpoint={checkpointAgent}/>
+      }} pageLabel={pageLabel} destinationPath={destinationPath} openProject={async project=>{await saveEditors();const data=await refresh();if(!data.projects.some(item=>item.id===project&&item.trashRoot===null))throw Error('Project is unavailable');navigate(String(project))}} key={ws} downloadAttachment={downloadAttachment} pages={lib.pages.filter(p=>!p.deleted)} ws={ws} page={currentDocument} write={!!write} offline={!!lib.offline} visible={agentOpen} close={()=>setAgentOpen(false)} open={openSource} applyPageEdit={applyPageEdit} checkpoint={syncAgentPages}/>
     <Input hidden ref={attachment} type="file" multiple onChange={e=>{
       const files=Array.from(e.currentTarget.files??[])
       e.currentTarget.value=''

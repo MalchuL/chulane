@@ -8,6 +8,8 @@ test('legacy palettes become personal themes and survive a saved Hallmark preset
     editor:{background:'#fffefd',text:'#292929',font:'mono',size:20},accent:'#145623'}
   const personal=themeSchema.parse(legacy)
   assert.equal(personal.preset,'custom')
+  assert.equal(personal.material,'auto')
+  assert.equal(themeSchema.parse({...personal,material:'solid'}).material,'solid')
   assert.deepEqual(personal.editor,legacy.editor)
   const saved=themeSchema.parse(JSON.parse(JSON.stringify({...personal,preset:'terminal'})))
   assert.deepEqual(activeTheme(saved),hallmarkThemes.terminal)

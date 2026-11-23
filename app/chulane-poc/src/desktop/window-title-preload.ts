@@ -45,7 +45,7 @@ export function installWindowTitle(remote:boolean){
     bar.append(lane)
     document.body.prepend(bar)
     // The older server UI may have no title-bar stylesheet. Always keep a usable drag area and menu.
-    Object.assign(bar.style,{position:'sticky',top:'0',height:'var(--window-title-height, 34px)',background:'var(--rail, #f3f3f7)',zIndex:'70'})
+    Object.assign(bar.style,{position:'sticky',top:'0',height:'var(--window-title-height, 34px)',background:'var(--caption-surface, var(--rail, #f3f3f7))',zIndex:'70'})
     Object.assign(lane.style,{display:'flex',alignItems:'center',height:'100%',marginLeft:'env(titlebar-area-x, 0px)',width:'env(titlebar-area-width, 100%)',webkitAppRegion:'drag'})
     if(!mac)brand.style.setProperty('app-region','no-drag')
     let lastPalette=''

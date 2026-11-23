@@ -1,4 +1,4 @@
-/** Chulane contributes a reference grip to Rivto rows. The editor's structural move grip stays independent. */
+/** Build chat citations from the source document for editor drops and keyboard attachment. */
 import {createContext,useContext,useId,useRef,type RefObject} from 'react'
 import {PointerSensor,useDraggable} from '@dnd-kit/react'
 import {Link2} from 'lucide-react'
@@ -9,9 +9,17 @@ import {Button} from './ui'
 
 export const BLOCK_REFERENCE='chulane-block-reference'
 export const BlockLinkPage=createContext<Source|undefined>(undefined)
-export type AttachBlockLinks=(links:BlockSource[])=>void
+export type AttachBlockLinks=(links:BlockSource[],hit?:Element)=>boolean
 export const BlockLinkComposer=createContext<RefObject<AttachBlockLinks|null>|null>(null)
 const HANDLE='block-link-handle'
+
+/** Read each captured block from its source pane, including blocks outside the viewport. */
+export function blockSources(page:Source,ids:readonly string[],blocks:{getBlockNode(id:string):{content:string}|undefined}):BlockSource[]{
+  return ids.flatMap(block=>{
+    const node=blocks.getBlockNode(block)
+    return node?[{id:page.id,title:page.title,block,excerpt:textPrefix(node.content,60)||'Empty block'}]:[]
+  })
+}
 
 /** Snapshot selection before the grip takes focus so a multi-block gesture retains its membership. */
 function BlockLinkHandle({block,page}:{block:BlockSlotProps['block'];page:Source}){
@@ -21,7 +29,7 @@ function BlockLinkHandle({block,page}:{block:BlockSlotProps['block'];page:Source
   function capture(){
     const selection=panel.selection.snapshot()?.blocks??[]
     const ids=selection.some(item=>item.id===block.id)?selection.map(item=>item.id):[block.id]
-    links.current=ids.map(id=>({id:page.id,block:id,title:page.title,excerpt:textPrefix(panel.blocks.getBlockNode(id)?.content??'',60)||'Empty block'}))
+    links.current=blockSources(page,ids,panel.blocks)
   }
   const view=useId()
   const {ref}=useDraggable({id:BLOCK_REFERENCE+view+page.id+'/'+block.id,type:BLOCK_REFERENCE,sensors:[PointerSensor],data:{links,dragged}})

@@ -219,10 +219,17 @@ export async function replayMetadata(replica:string,workspace:number,signal:Abor
 
 /** Enumerate durable source identifiers without loading binary document bodies. */
 async function documentSources(scope:string){
-  const db=await database(),tx=db.transaction('drafts','readonly'),prefix=scope+'/'
-  const cursor=tx.objectStore('drafts').index('source').openKeyCursor(IDBKeyRange.bound(prefix,prefix+'\uffff'),'nextunique')
+  const db=await database(),tx=db.transaction('drafts','readonly')
+  const cursor=tx.objectStore('drafts').index('source').openKeyCursor(descendants(scope))
   const sources:string[]=[]
-  cursor.onsuccess=()=>{const item=cursor.result;if(item){sources.push(String(item.key));item.continue()}}
+  cursor.onsuccess=()=>{
+    const item=cursor.result
+    if(!item)return
+    const source=String(item.key)
+    sources.push(source)
+    // WebKit can abort nextunique. Seek to the next possible string key to skip this page's other writers.
+    item.continue(source+'\0')
+  }
   await committed(tx)
   return sources
 }

@@ -3,14 +3,21 @@ import {resolveBlockListNumbers,isNumberedListType} from '@chulane/rivto-react/l
 import {labeledFiles,labeledReferences} from './library.ts'
 import {canvasLabels,listMarker,taskDescription} from './document-text.ts'
 import {paragraphBlockFactory,separatorBlockFactory} from '@chulane/rivto-react/block-factories'
-import {markdownSyntax,markdownFormat,tableMarkdownFormat} from './markdown-format.ts'
-import {toMarkdown} from 'mdast-util-to-markdown'
+import {markdownSyntax,tableMarkdownFormat} from './markdown-format.ts'
+import {markMarkdownReferences} from './named-references.ts'
+import {toMarkdown,type Options} from 'mdast-util-to-markdown'
+import {gfmToMarkdown} from 'mdast-util-gfm'
 import {fromMarkdown} from 'mdast-util-from-markdown'
 import {YjsDoc} from '@chulane/crdt-doc'
 import {DocumentModelImpl,type Block} from '@chulane/document-model'
 import * as Y from 'yjs'
 
 type MarkdownTable=Extract<ReturnType<typeof fromMarkdown>['children'][number],{type:'table'}>
+
+// Labels are plain text even when they resemble a GFM autolink or a Chulane tag.
+const labelFormat:Options={extensions:[gfmToMarkdown()],unsafe:[
+  {character:'#',inConstruct:'phrasing',notInConstruct:'link'}
+]}
 
 // GFM cells contain inline Markdown. A leading marker belongs to the cell, even at the start of its input string.
 const tableCellSyntax={...markdownSyntax,extensions:[...markdownSyntax.extensions,{disable:{null:[
@@ -31,12 +38,14 @@ function exportTable(block:Block,omitted:Set<string>){
     for(const cell of row.children){
       if(cell.type!=='table-cell'||cell.children.length||cell.listProps.type||/[\r\n]/.test(cell.content))return
       let [inline]=fromMarkdown(cell.content,markdownSyntax).children
+      const literal=inline?.type==='definition'||inline?.type==='code'||inline?.type==='html'
       if(inline&&inline.type!=='paragraph'){
         // Rivto previews block Markdown in a cell. Keep its source inline and report the presentation loss.
         lostCellFormatting=true
         inline=fromMarkdown(cell.content,tableCellSyntax).children[0]
       }
       if(inline&&inline.type!=='paragraph')return
+      if(inline)markMarkdownReferences(inline,cell.content,literal)
       // The standalone Markdown parser trims horizontal padding. In an editor cell it is user-entered text.
       const leading=cell.content.match(/^[ \t]+/)?.[0]??''
       const trailing=cell.content.match(/(?<=[^ \t])[ \t]+$/)?.[0]??''
@@ -75,7 +84,7 @@ function referenceList(heading:string,references:{label:string;url?:string}[]){
   return toMarkdown({type:'root',children:[
     {type:'heading',depth:2,children:[{type:'text',value:heading}]},
     {type:'list',ordered:false,children:items}
-  ]},markdownFormat).trimEnd()
+  ]},labelFormat).trimEnd()
 }
 
 /** Use the public server address for navigable references. Local profiles and trashed targets retain readable identities. */
@@ -105,7 +114,7 @@ export function exportMarkdown(state:Uint8Array|null,plain:string,hasAttachments
           if(children.length)children.push({type:'break'})
           children.push({type:'text',value:line})
         }
-        labels.push(toMarkdown({type:'paragraph',children},markdownFormat).slice(0,-1))
+        labels.push(toMarkdown({type:'paragraph',children},labelFormat).slice(0,-1))
       }
     }
     if(Object.keys(model.pluginData.getAll()).length)omitted.add('document properties')
