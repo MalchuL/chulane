@@ -60,11 +60,12 @@ export function useDeviceTheme(profile:string){
     return ()=>opaquePreference.removeEventListener('change',update)
   },[opaquePreference])
   const material=current?.material??'auto'
-  const glass=saved?.key===key&&!opaque&&(material==='glass'||(material==='auto'&&(current?.preset??'chulane')==='chulane'))
+  const glass=saved?.key===key&&!opaque&&(material==='glass'||material==='still-glass'||(material==='auto'&&(current?.preset??'chulane')==='chulane'))
   useLayoutEffect(()=>{
-    document.documentElement.toggleAttribute('data-glass',glass)
+    if(glass)document.documentElement.setAttribute('data-glass',material==='still-glass'?'still':'')
+    else document.documentElement.removeAttribute('data-glass')
     return ()=>document.documentElement.removeAttribute('data-glass')
-  },[glass])
+  },[glass,material])
   useLayoutEffect(()=>{
     if(!applied)return
     const root=document.documentElement,{application,editor,accent}=applied
@@ -122,6 +123,7 @@ export function Appearance({theme,draft,edit,save,ready,error}:AppearanceProps){
         <label>Surface style<NativeSelect value={draft.material} onChange={e=>edit({...draft,material:e.target.value as DeviceTheme['material']})}>
           <NativeSelectOption value="auto">Theme default</NativeSelectOption>
           <NativeSelectOption value="glass">Liquid glass</NativeSelectOption>
+          <NativeSelectOption value="still-glass">Still glass</NativeSelectOption>
           <NativeSelectOption value="solid">Solid</NativeSelectOption>
         </NativeSelect></label>
         {manual?<>

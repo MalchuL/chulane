@@ -36,10 +36,10 @@ export const projectRename=z.object({id:z.number().int().positive(),name:z.strin
 export const projectRenameInstructions='Use proposeProjectRename to rename a project by ID after browsing its parent folder.'
 export const projectCreation=z.object({name:z.string().trim().min(1).max(250),parent:z.number().int().positive().nullable()})
 /** Stream a bounded model/tool loop; Chulane owns and persists tool results and authorization. */
-export async function runAgent({mode,settings,history,workspaceCalendar,current,tools:operations,signal,publish,activity,referencedDocuments,referencedBlocks}:AgentTurn){
+export async function runAgent({registerSteer,mode,settings,history,workspaceCalendar,current,tools:operations,signal,publish,activity,referencedDocuments,referencedBlocks}:AgentTurn){
   if(settings.agent){
     const {runLocalAgent}=await import('./local-agent.ts')
-    return runLocalAgent(settings.agent,{history,workspaceCalendar,currentDocument:current,referencedDocuments,referencedBlocks},operations,signal,publish,activity,mode)
+    return runLocalAgent(settings.agent,{history,workspaceCalendar,currentDocument:current,referencedDocuments,referencedBlocks},operations,signal,publish,activity,mode,registerSteer)
   }
   const [{Agent},{createTool}]=await Promise.all([import('@mastra/core/agent'),import('@mastra/core/tools')])
   const proposeRename=operations.proposeRename

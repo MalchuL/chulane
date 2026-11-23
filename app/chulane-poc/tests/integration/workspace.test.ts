@@ -664,7 +664,7 @@ for(const version of [1,2])test('format '+version+' attachment search upgrades p
   const listed=await(await api('attachment-text?id='+page)).json()
   assert.deepEqual(listed.files.map(f=>f.name),[name,'Results.TSV'])
   const checked=new DatabaseSync(file,{readOnly:true})
-  try{assert.equal(checked.prepare('PRAGMA user_version').get()!.user_version,6)}finally{checked.close()}
+  try{assert.equal(checked.prepare('PRAGMA user_version').get()!.user_version,7)}finally{checked.close()}
 })
 
 test('project trash restores the original subtree and preserves independent deletions',async t=>{

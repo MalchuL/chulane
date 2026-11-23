@@ -55,7 +55,11 @@ export type TurnTools = {
   propose?(id:number,block:string,text:string):ToolDecision
 }
 
+/** True acknowledges delivery, false is a definite rejection. A thrown error means delivery is unknown. */
+export type LiveSteer=(instruction:string)=>Promise<boolean>
+export type RegisterSteer=(handler:LiveSteer|undefined)=>void
 export type AgentTurn={
+  registerSteer?:RegisterSteer
   mode?:AgentMode
   settings:ProviderSettings
   history:{role:'user'|'assistant';content:string}[]

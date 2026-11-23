@@ -20,7 +20,7 @@
     "smoke:backup": "tsx tests/e2e/desktop-backup.spec.ts",
     "smoke:plugins": "tsx tests/e2e/plugin-blocks.spec.ts",
     "smoke:servers": "tsx tests/e2e/server-profiles.spec.ts",
-    "smoke:agent": "tsx tests/e2e/agent-context-sync.spec.ts && tsx tests/e2e/agent.spec.ts",
+    "smoke:agent": "tsx tests/e2e/chat-queue.spec.ts && tsx tests/e2e/agent-context-sync.spec.ts && tsx tests/e2e/agent.spec.ts",
     "smoke:agent:live": "tsx tests/e2e/live-agent.ts",
     "smoke:windows": "powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File packaging/windows/test-installer.ps1",
     "smoke:installed": "node packaging/test-installed.mjs",

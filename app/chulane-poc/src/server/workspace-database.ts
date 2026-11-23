@@ -3,7 +3,7 @@ import {DatabaseSync} from 'node:sqlite'
 
 // SQLite reserves these two header fields for applications. CHLN identifies a Chulane workspace.
 const applicationId=0x43484c4e
-const currentVersion=6
+const currentVersion=7
 
 // All stamped formats contain these canonical records. Search indexes can be rebuilt on startup.
 const stampedWorkspaceSchema={
@@ -61,7 +61,7 @@ export function verifyWorkspaceSchema(db:DatabaseSync,version:number){
   const tables=new Set(db.prepare("SELECT name FROM sqlite_schema WHERE type='table'").all().map(row=>row.name))
   const columns=db.prepare('SELECT name FROM pragma_table_info(?)')
   const base=version>=4?{...formatThreeSchema,creation_receipts:['actor','operation','fingerprint','result']}:version>=3?formatThreeSchema:version===0?legacySnapshotSchema:stampedWorkspaceSchema
-  const schema=version>=5?{...base,...(version>=6&&{chat_edits:[...formatThreeSchema.chat_edits,'canvas'],chat_messages:[...formatThreeSchema.chat_messages,'mode']}),named_page_references:['source','name','target'],tag_applications:[...formatThreeSchema.tag_applications,'fromWriting']}:base
+  const schema=version>=5?{...base,...(version>=7&&{chat_queue:['id','chat','author','payload','origin','plugin','agent','revision','priority','error']}),...(version>=6&&{chat_edits:[...formatThreeSchema.chat_edits,'canvas'],chat_messages:[...formatThreeSchema.chat_messages,'mode']}),named_page_references:['source','name','target'],tag_applications:[...formatThreeSchema.tag_applications,'fromWriting']}:base
   for(const [table,required] of Object.entries(schema)){
     if(!tables.has(table))throw Error('Missing workspace table: '+table)
     const names=new Set(columns.all(table).map(row=>row.name))

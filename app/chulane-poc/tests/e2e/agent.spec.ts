@@ -998,7 +998,20 @@ async function exercise(p:Page,configure=false){
   await side.locator('article[data-author="assistant"]').getByRole('link',{name:/Second observation/}).last().click()
   await expect(p.locator('[data-source-page="'+current.id+'"] [data-block-content]').nth(1)).toBeInViewport()
   await expect(side.getByRole('button',{name:'Stop response'})).toBeVisible()
+  await message.fill('Queued question')
+  await message.press('Enter')
+  const waiting=side.getByLabel('Queued messages')
+  await expect(waiting).toContainText('Queued question')
+  await message.fill('My other draft')
+  await waiting.getByRole('button',{name:'Edit queued message'}).click()
+  await message.fill('Edited question')
+  await message.press('Enter')
+  await expect(message).toHaveValue('My other draft')
+  await expect(waiting).toContainText('Edited question')
+  await waiting.getByRole('button',{name:'Delete queued message'}).click()
+  await expect(waiting).toHaveCount(0)
   await p.reload();await p.getByRole('button',{name:'Agent',exact:true}).click()
+  await side.getByRole('button',{name:'Stop response'}).click()
   await expect(side.getByText('Turn interrupted')).toBeVisible()
   await expect(side.getByText('Partial answer')).toBeVisible()
   const toggle=side.getByRole('button',{name:'Run in background'})
@@ -1400,6 +1413,7 @@ if(provider==='codex'){
     else{
       await local.reload()
       await local.getByRole('button',{name:'Agent',exact:true}).click()
+      await side.getByRole('button',{name:'Stop response'}).click()
     }
     await expect(interrupted).toHaveCount(previousInterruptions+1)
     if(end==='reload'){

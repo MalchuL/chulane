@@ -16,7 +16,7 @@ export const themeNames={chulane:'Chulane',ink:'Ink',terminal:'Terminal',custom:
 // Older records contain just the manual palette. Keep those values as the device's custom theme.
 export const themeSchema=tokens.extend({
   preset:z.enum(['chulane','ink','terminal','custom']).default('custom'),
-  material:z.enum(['auto','glass','solid']).default('auto'),
+  material:z.enum(['auto','glass','still-glass','solid']).default('auto'),
 })
 export type DeviceTheme=z.infer<typeof themeSchema>
 export type ThemeTokens=z.infer<typeof tokens>

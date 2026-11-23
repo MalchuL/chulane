@@ -973,7 +973,7 @@ function App(){
         const view=mounted.find(view=>view.active)??mounted[0]
         const apply=view?.apply.current??journalEditor(edit.page)?.apply.current
         if(apply)await apply(edit.page,async()=>edit)
-      }} pageLabel={pageLabel} destinationPath={destinationPath} openProject={async project=>{await saveEditors();const data=await refresh();if(!data.projects.some(item=>item.id===project&&item.trashRoot===null))throw Error('Project is unavailable');navigate(String(project))}} key={ws} downloadAttachment={downloadAttachment} pages={lib.pages.filter(p=>!p.deleted)} ws={ws} page={currentDocument} write={!!write} offline={!!lib.offline} visible={agentOpen} close={()=>setAgentOpen(false)} open={openSource} applyPageEdit={applyPageEdit} checkpoint={syncAgentPages}/>
+      }} pageLabel={pageLabel} destinationPath={destinationPath} openProject={async project=>{await saveEditors();const data=await refresh();if(!data.projects.some(item=>item.id===project&&item.trashRoot===null))throw Error('Project is unavailable');navigate(String(project))}} key={layoutKey} downloadAttachment={downloadAttachment} pages={lib.pages.filter(p=>!p.deleted)} ws={ws} page={currentDocument} write={!!write} offline={!!lib.offline} visible={agentOpen} close={()=>setAgentOpen(false)} open={openSource} applyPageEdit={applyPageEdit} checkpoint={syncAgentPages}/>
     <Input hidden ref={attachment} type="file" multiple onChange={e=>{
       const files=Array.from(e.currentTarget.files??[])
       e.currentTarget.value=''

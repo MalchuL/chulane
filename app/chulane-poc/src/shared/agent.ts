@@ -7,7 +7,7 @@ export const modeDescriptions:Record<AgentMode,string>={
   append:'New paragraphs and canvas elements are applied immediately. Other changes need approval.',
   full:'Apply supported page, project and canvas edits immediately with your workspace permissions.',
 }
-export type Chat = {id:number; title:string; agent?:LocalAgent|null; canDelete:boolean}
+export type Chat = {id:number; title:string; agent?:LocalAgent|null; canDelete:boolean;running?:boolean;queued?:number;latest?:number}
 export type AttachmentExcerpt={matchedFilename?:true;id:number;name:string;excerpt:string;matchOffset?:number}
 export type Source = {id:number; title:string; day?:string|null; surface?:'canvas'; block?:string; excerpt?:string; excerptOffset?:number; readFrom?:{block:string|null;offset:number;field?:'description'}; attachment?:AttachmentExcerpt & {readOffset?:number}}
 /** Include the permanent calendar date on journal sources, even when their display title changes. */
@@ -34,7 +34,8 @@ export type Message = {mode?:AgentMode|null;activity?:ChatActivity[];requestedBy
 export type EditPreview = {requestedBlock?:string|null;reviewedTitle?:string|null;reviewedBy?:string|null;kind:'text'|'rename'|'canvas';id:number; message:number; page:number; title:string; block:string; before:string; after:string; status:string}
 export type ProjectRequest={beforeName?:string|null;reviewedBy?:string|null;id:number;message:number;name:string;parent:number|null;parentName:string|null;reviewedPath?:string|null;project:number|null;status:string}
 export type PageRequest={reviewedBy?:string|null;id:number;message:number;title:string;markdown:string;parent:number|null;parentName:string|null;reviewedPath?:string|null;page:number|null;status:string}
-export type Conversation = {pages:PageRequest[];projects:ProjectRequest[];messages:Message[]; edits:EditPreview[]}
+export type QueuedTurn={id:number;revision:number;mine:boolean;error:string|null;turn:{text:string;page:number|null;surface?:'page'|'canvas';mode?:AgentMode;background:boolean;references:number[];blockLinks:{id:number;block:string;excerpt?:string}[]}}
+export type Conversation = {queue?:QueuedTurn[];canStop?:boolean;pages:PageRequest[];projects:ProjectRequest[];messages:Message[]; edits:EditPreview[]}
 export type AppliedEdit = {page:number; base:string; delta:string; block:string}
 
 /** Executables selected by the host. Browser requests can only name one of these installed agents. */

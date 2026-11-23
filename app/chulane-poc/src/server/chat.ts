@@ -15,12 +15,22 @@ import {renamePage} from './page-titles.ts'
 import {HermesSetupError} from './local-agent.ts'
 import {createOnce,hasCreationReceipt} from './creation-receipts.ts'
 import {requireRequesterWrite} from './accounts.ts'
-import type {AgentEnvironment,AgentTurn,CitedAttachment,DocumentContext,LinkedMessage,MessageReviews} from './agent-environment.ts'
+import type {LiveSteer,AgentEnvironment,AgentTurn,CitedAttachment,DocumentContext,LinkedMessage,MessageReviews} from './agent-environment.ts'
 import {findProjects,browseProject,confirmProjectPath,createProject,projectName,renameProject,reviewProjectPath} from './projects.ts'
 import {workspaceDay} from '../shared/library.ts'
 import {canvasRead,canvasEdit,canvasValue} from '../shared/agent-canvas.ts'
 import {agentModes,pageSource,LOCAL_AGENTS,MAX_BLOCK_LINKS,MAX_PAGE_REFERENCES,type AppliedEdit,type LibrarySearchHit,type PluginDraft,type Source} from '../shared/agent.ts'
 
+const turnInput=z.object({
+  background:z.boolean().default(false),allowEdits:z.boolean().default(true),
+  mode:z.enum(agentModes).optional(),surface:z.enum(['canvas','page']).optional(),
+  text:z.string().trim().min(1).max(12000),page:z.number().int().positive().nullable(),
+  references:z.array(z.number().int().positive()).max(MAX_PAGE_REFERENCES).default([]),
+  blockLinks:z.array(z.object({
+    id:z.number().int().positive(),block:z.string().min(1).max(1024),excerpt:z.string().max(256).optional()
+  })).max(MAX_BLOCK_LINKS).default([])
+})
+const submission=turnInput.extend({operationId:z.string().optional(),managed:z.boolean().optional()})
 const foregroundEnvironment:AgentEnvironment={run:runAgent}
 
 /** Keep historical file references small. Reading a cited passage checks current workspace access. */
@@ -42,7 +52,7 @@ function valid<T>(schema:z.ZodType<T>, data:unknown):T {
 const editBlockColumns=`e.block,CASE WHEN e.kind='text' AND e.status<>'applied' THEN e.block ELSE e.requestedBlock END AS requestedBlock`
 
 /** Install the agent storage and return request and shutdown operations owned by this service. */
-export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof reviewedDocuments>,search:(workspace:number,query:string)=>Promise<LibrarySearchHit[]>,readProperties:(workspace:number,query:PropertyQuery)=>PropertyBatch,provider:Provider={get:environmentProvider},backgroundEnvironment:AgentEnvironment=foregroundEnvironment){
+export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof reviewedDocuments>,search:(workspace:number,query:string)=>Promise<LibrarySearchHit[]>,readProperties:(workspace:number,query:PropertyQuery)=>PropertyBatch,provider:Provider={get:environmentProvider},backgroundEnvironment:AgentEnvironment=foregroundEnvironment,restorePlugin?:SavePluginFolder){
   db.exec(`
     CREATE TABLE IF NOT EXISTS chats(id INTEGER PRIMARY KEY, workspace INTEGER NOT NULL REFERENCES workspaces, title TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS chat_messages(id INTEGER PRIMARY KEY, chat INTEGER NOT NULL REFERENCES chats, role TEXT NOT NULL, text TEXT NOT NULL, status TEXT NOT NULL, sources TEXT NOT NULL DEFAULT '[]');
@@ -92,14 +102,42 @@ export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof revie
     db.exec('ALTER TABLE chat_messages ADD COLUMN mode TEXT')
   if(!db.prepare('PRAGMA table_info(chat_edits)').all().some(column=>column.name==='canvas'))
     db.exec('ALTER TABLE chat_edits ADD COLUMN canvas INTEGER NOT NULL DEFAULT 0')
-  const runs=new Map<number,{workspace:number;message:number;observers:Map<ServerResponse,()=>boolean>;controller:AbortController;canRun:()=>boolean;finished:Promise<void>}>()
+  const runs=new Map<number,{workspace:number;message:number;mode:string;agent?:string;steer?:LiveSteer;observers:Map<ServerResponse,()=>boolean>;controller:AbortController;canRun:()=>boolean;finished:Promise<void>}>()
+  db.exec(`CREATE TABLE IF NOT EXISTS chat_queue(id INTEGER PRIMARY KEY AUTOINCREMENT,chat INTEGER NOT NULL REFERENCES chats ON DELETE CASCADE,
+    author TEXT NOT NULL,payload TEXT NOT NULL,origin TEXT NOT NULL,plugin INTEGER NOT NULL,agent TEXT,revision INTEGER NOT NULL DEFAULT 1,
+    priority INTEGER NOT NULL DEFAULT 0,error TEXT);
+    CREATE INDEX IF NOT EXISTS chat_queue_order ON chat_queue(chat,priority DESC,id)`)
+  const pendingSteers=new Set<number>()
+  const draining=new Set<number>()
+  /** Start the oldest eligible entry after the preceding provider has released its run. */
+  async function drain(chat:number){
+    if(stopped||runs.has(chat)||draining.has(chat))return
+    const entry=db.prepare(`SELECT q.*,c.workspace FROM chat_queue q JOIN chats c ON c.id=q.chat
+      WHERE q.chat=? AND c.deleted=0 AND q.error IS NULL ORDER BY priority DESC,q.id LIMIT 1`).get(chat)
+    if(!entry)return
+    draining.add(chat)
+    const ws=Number(entry.workspace),account=entry.author==='shared-key'?null:Number(entry.author)
+    const allowed=()=>!!db.prepare(`SELECT 1 FROM workspaces w WHERE w.id=? AND archived=0 AND
+      ((accessMode='key' AND ? IS NULL) OR (accessMode='account' AND EXISTS(SELECT 1 FROM memberships WHERE workspace=w.id AND account=? AND role IN ('owner','editor'))))`).get(ws,account,account)
+    try{
+      await handle('/api/agent/chats/'+chat+'/turn','POST',ws,async()=>JSON.parse(String(entry.payload)),undefined,allowed,
+        {account,origin:String(entry.origin),owner:false,write:true,canRead:allowed,savePlugin:entry.plugin?restorePlugin:undefined},entry)
+    }catch(error){
+      if((error as {status?:number}).status!==503&&!runs.has(chat))
+        db.prepare('UPDATE chat_queue SET error=?,revision=revision+1 WHERE id=? AND revision=?').run((error as Error).message,entry.id,entry.revision)
+    }finally{draining.delete(chat)}
+  }
+  const timer=setInterval(()=>{
+    for(const row of db.prepare('SELECT DISTINCT chat FROM chat_queue WHERE error IS NULL').all())void drain(Number(row.chat))
+  },500)
+  timer.unref()
   let stopped=false
   const body=documents.read
-  async function handle(path:string,method:string,ws:number,input:(limit?:number,allowEmpty?:boolean)=>Promise<unknown>,res:ServerResponse,canRun:()=>boolean,actor:ChatActor){
+  async function handle(path:string,method:string,ws:number,input:(limit?:number,allowEmpty?:boolean)=>Promise<unknown>,res:ServerResponse|undefined,canRun:()=>boolean,actor:ChatActor,entry?:Record<string,import('node:sqlite').SQLOutputValue>){
     const author=actor.account===null?'shared-key':String(actor.account)
     if(path==='/api/agent' && method==='GET'){
       const settings=provider.get()
-      return {canSavePlugin:!!actor.savePlugin,configured:!!(settings.agent||settings.key),agent:settings.agent,hasApiKey:!!settings.key,localAgents:provider.selectAgent?LOCAL_AGENTS:[],model:settings.model,configurable:!!provider.save,chats:db.prepare('SELECT id,title,author,localAgent FROM chats WHERE workspace=? AND deleted=0 ORDER BY id DESC').all(ws).map(row=>({id:row.id,title:row.title,agent:provider.checkAgent?LOCAL_AGENTS.find(agent=>agent===row.localAgent):undefined,canDelete:actor.write&&(actor.owner||author===row.author)}))}
+      return {canSavePlugin:!!actor.savePlugin,configured:!!(settings.agent||settings.key),agent:settings.agent,hasApiKey:!!settings.key,localAgents:provider.selectAgent?LOCAL_AGENTS:[],model:settings.model,configurable:!!provider.save,chats:db.prepare(`SELECT id,title,author,localAgent,(SELECT id*2+(status<>'running') FROM chat_messages m WHERE m.chat=chats.id ORDER BY id DESC LIMIT 1) AS latest,(SELECT count(*) FROM chat_queue q WHERE q.chat=chats.id) AS queued FROM chats WHERE workspace=? AND deleted=0 ORDER BY id DESC`).all(ws).map(row=>({id:row.id,title:row.title,...(row.latest&&{latest:row.latest}),...(row.queued&&{queued:row.queued}),...(runs.has(Number(row.id))&&{running:true}),agent:provider.checkAgent?LOCAL_AGENTS.find(agent=>agent===row.localAgent):undefined,canDelete:actor.write&&(actor.owner||author===row.author)}))}
     }
     if(path==='/api/agent/tasks'&&method==='GET')return db.prepare(`SELECT m.id,m.chat,m.status,
       COALESCE((SELECT substr(u.text,1,100) FROM chat_messages u WHERE u.chat=m.chat AND u.id<m.id AND u.role='user' ORDER BY u.id DESC LIMIT 1),c.title) AS title,
@@ -109,6 +147,7 @@ export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof revie
     if(cancel&&method==='POST'){
       const task=db.prepare('SELECT m.chat,m.status FROM chat_messages m JOIN chats c ON c.id=m.chat WHERE c.workspace=? AND c.deleted=0 AND m.id=? AND m.background=1').get(ws,Number(cancel[1]))
       if(!task)reject(404,'Task unavailable')
+      if(task.status==='running'&&!db.prepare('SELECT 1 FROM chat_messages WHERE id=? AND requester IS ?').get(Number(cancel[1]),actor.account))reject(403,'Only the author can stop this task.')
       if(task.status==='running')runs.get(Number(task.chat))?.controller.abort('cancelled')
       return {}
     }
@@ -137,12 +176,76 @@ export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof revie
         ()=>Number(db.prepare("INSERT INTO chats(workspace,title,author,localAgent) VALUES(?,'New chat',?,?)").run(ws,author,agent??null).lastInsertRowid),
         id=>!!db.prepare('SELECT 1 FROM chats WHERE workspace=? AND id=? AND deleted=0').get(ws,id))}
     }
-    const route=/^\/api\/agent\/chats\/(\d+)(?:\/(turn|edits|pages|projects|provider|plugins)(?:\/(\d+)\/(apply|dismiss|save))?)?$/.exec(path)
+    const route=/^\/api\/agent\/chats\/(\d+)(?:\/(turn|edits|pages|projects|provider|plugins|queue|stop)(?:\/(\d+)\/(apply|dismiss|save|edit|delete|steer))?)?$/.exec(path)
     if(!route)reject(404,'Unknown chat operation')
     const chat=Number(route[1])
     const getChat=db.prepare('SELECT author,localAgent FROM chats WHERE id=? AND workspace=? AND deleted=0')
     const conversation=getChat.get(chat,ws)
     if(!conversation)reject(404,'Chat unavailable')
+    const run=runs.get(chat)
+    const ownsRun=!!run&&!!db.prepare('SELECT 1 FROM chat_messages WHERE id=? AND requester IS ?').get(run.message,actor.account)
+    if(route[2]==='stop'&&method==='POST'){
+      const {message}=valid(z.object({message:z.number().int()}),await input())
+      if(!canRun()||!ownsRun||runs.get(chat)!==run||run?.message!==message)reject(409,'This response is no longer yours to stop.')
+      run.controller.abort();return {}
+    }
+    if(route[2]==='queue'&&method==='POST'){
+      const data=await input()
+      if(!canRun()||!getChat.get(chat,ws))reject(403,'Editor access required')
+      if(!route[3]){
+        const {operationId,...payload}=valid(turnInput.extend({operationId:z.string()}),data)
+        const pinned=provider.checkAgent&&LOCAL_AGENTS.find(name=>name===conversation.localAgent)
+        const agent=pinned??provider.get().agent??null
+        const id=createOnce(db,actor.account,operationId,['queue',ws,chat,payload],()=>Number(db.prepare(
+          'INSERT INTO chat_queue(chat,author,payload,origin,plugin,agent) VALUES(?,?,?,?,?,?)'
+        ).run(chat,author,JSON.stringify(payload),actor.origin,Number(!!actor.savePlugin),agent).lastInsertRowid),()=>true)
+        return {queued:id}
+      }
+      const {revision}=valid(z.object({revision:z.number().int()}),data)
+      const id=Number(route[3]),row=db.prepare('SELECT * FROM chat_queue WHERE chat=? AND id=? AND revision=?').get(chat,id,revision)
+      if(!row)reject(409,'This queued message has changed or started.')
+      if(pendingSteers.has(id))reject(409,'Waiting for the provider to acknowledge steering.')
+      if(row.author!==author)reject(403,'Only the author can change a queued message.')
+      if(route[4]==='edit'){
+        const payload=valid(turnInput,data)
+        db.prepare('UPDATE chat_queue SET payload=?,revision=revision+1,error=NULL WHERE id=?').run(JSON.stringify(payload),id)
+      }else if(route[4]==='delete')db.prepare('DELETE FROM chat_queue WHERE id=?').run(id)
+      else if(route[4]==='steer'){
+        const {message}=valid(z.object({message:z.number().int()}),data)
+        if(!ownsRun||runs.get(chat)!==run||run?.message!==message||run.controller.signal.aborted)reject(409,'The running response changed.')
+        const queued=turnInput.parse(JSON.parse(String(row.payload)))
+        const queuedMode=queued.allowEdits?(queued.mode??'suggest'):'ask'
+        if(run.steer&&run.mode===queuedMode&&run.agent===row.agent){
+          const ids=[...new Set([queued.page,...queued.references,...queued.blockLinks.map(link=>link.id)].filter((id):id is number=>id!==null))]
+          const context=ids.map(id=>{
+            const source=body(ws,id),doc=documents.liveText(id)??agentDocument(source)
+            const blocks=queued.blockLinks.filter(link=>link.id===id).map(link=>{
+              const block=doc.blocks.find(item=>item.id===link.block)
+              if(!block)reject(409,'A linked block is unavailable.')
+              return {id:block.id,...blockPreview(block,2400)}
+            })
+            return {id,title:source.title,blocks,...((queued.page===id||queued.references.includes(id))&&{preview:documentPreview(doc,0)}),
+              ...(queued.page===id&&queued.surface==='canvas'&&{canvas:agentCanvas(source,0)})}
+          })
+          // A host crash between the write and acknowledgement must never replay this instruction.
+          db.prepare("UPDATE chat_queue SET error='Steering delivery unconfirmed. Review before retrying.',revision=revision+1 WHERE id=?").run(id)
+          pendingSteers.add(id)
+          try{
+            if(await run.steer(JSON.stringify({instruction:queued.text,context,surface:queued.surface}))){
+              db.exec('BEGIN IMMEDIATE')
+              try{
+                if(getChat.get(chat,ws))db.prepare("INSERT INTO chat_messages(chat,role,text,status,sources,requester) VALUES(?,'user',?,'sent',?,?)").run(chat,queued.text,JSON.stringify(context.flatMap(doc=>[{id:doc.id,title:doc.title},...doc.blocks.map(block=>({id:doc.id,title:doc.title,block:block.id}))])),actor.account)
+                db.prepare('DELETE FROM chat_queue WHERE id=?').run(id);db.exec('COMMIT')
+              }catch(error){db.exec('ROLLBACK');throw error}
+              return {}
+            }
+          }finally{pendingSteers.delete(id)}
+        }
+        db.prepare('UPDATE chat_queue SET priority=1,error=NULL,revision=revision+1 WHERE id=?').run(id)
+        if(runs.get(chat)===run)run.controller.abort('steered')
+      }else reject(405,'Unknown queue action')
+      return {}
+    }
     if(route[2]==='plugins'&&route[3]&&route[4]==='save'&&method==='POST'){
       if(!actor.savePlugin||!canRun())reject(403,'Save plugin folders from a local desktop workspace.')
       const row=db.prepare("SELECT pluginDraft FROM chat_messages WHERE id=? AND chat=? AND role='assistant'").get(Number(route[3]),chat)
@@ -167,6 +270,7 @@ export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof revie
       if(!actor.write||(!actor.owner&&conversation.author!==author))reject(403,'Only the chat author or workspace owner can delete this conversation.')
       db.exec('BEGIN IMMEDIATE')
       try{
+        db.prepare('DELETE FROM chat_queue WHERE chat=?').run(chat)
         db.prepare('DELETE FROM chat_page_requests WHERE message IN (SELECT id FROM chat_messages WHERE chat=?)').run(chat)
         db.prepare('DELETE FROM chat_project_requests WHERE message IN (SELECT id FROM chat_messages WHERE chat=?)').run(chat)
         db.prepare('DELETE FROM chat_edits WHERE message IN (SELECT id FROM chat_messages WHERE chat=?)').run(chat)
@@ -179,6 +283,8 @@ export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof revie
       return {}
     }
     if(!route[2] && method==='GET')return {
+      canStop:ownsRun,
+      queue:db.prepare('SELECT id,payload,revision,error,author FROM chat_queue WHERE chat=? ORDER BY priority DESC,id').all(chat).map(q=>({id:q.id,turn:JSON.parse(String(q.payload)),revision:q.revision,error:q.error,mine:q.author===author})),
       messages:db.prepare('SELECT id,role,text,status,sources,mode,activity,pluginDraft,(SELECT name FROM accounts WHERE id=requester) AS requestedBy FROM chat_messages WHERE chat=? ORDER BY id').all(chat).map(({pluginDraft,activity,...m})=>({...m,...(activity!=='[]'&&{activity:JSON.parse(String(activity))}),sources:JSON.parse(String(m.sources)),...(pluginDraft?{pluginDraft:JSON.parse(String(pluginDraft))}:{})})),
       pages:db.prepare('SELECT r.id,r.message,r.title,r.markdown,r.parent,r.parentName,r.reviewedPath,r.page,r.status,(SELECT name FROM accounts WHERE id=r.reviewer) AS reviewedBy FROM chat_page_requests r JOIN chat_messages m ON m.id=r.message WHERE m.chat=? ORDER BY r.id').all(chat),
       projects:db.prepare('SELECT r.id,r.message,r.name,r.beforeName,r.parent,r.parentName,r.reviewedPath,r.project,r.status,(SELECT name FROM accounts WHERE id=r.reviewer) AS reviewedBy FROM chat_project_requests r JOIN chat_messages m ON m.id=r.message WHERE m.chat=? ORDER BY r.id').all(chat),
@@ -233,6 +339,7 @@ export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof revie
       if(route[2]==='edits')return decideEdit(id,apply,apply?valid(z.object({reviewedTitle:z.string().optional()}),await input(undefined,true)).reviewedTitle:undefined)??{}
     }
     if(route[2]==='turn'&&!route[3]&&method==='GET'){
+      if(!res)throw Error('Missing stream reader')
       const run=runs.get(chat)
       if(!run||run.controller.signal.aborted){res.writeHead(204,{'Cache-Control':'no-store'});res.end();return}
       run.observers.set(res,actor.canRead)
@@ -243,7 +350,7 @@ export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof revie
       return
     }
     if(route[2]!=='turn' || route[3] || method!=='POST')reject(405,'Chat operation unavailable')
-    const {operationId,...turn}=valid(z.object({operationId:z.string().optional(),background:z.boolean().default(false),allowEdits:z.boolean().default(true),mode:z.enum(agentModes).optional(),surface:z.enum(['canvas','page']).optional(),text:z.string().trim().min(1).max(12000),page:z.number().int().positive().nullable(),references:z.array(z.number().int().positive()).max(MAX_PAGE_REFERENCES).default([]),blockLinks:z.array(z.object({id:z.number().int().positive(),block:z.string().min(1).max(1024)})).max(MAX_BLOCK_LINKS).default([])}),await input())
+    const {operationId,managed,...turn}=valid(submission,await input())
     if(stopped)reject(503,'Agent service stopped')
     if(!canRun())reject(403,'Editor access required')
     const currentChat=getChat.get(chat,ws)??reject(404,'Chat unavailable')
@@ -271,9 +378,10 @@ export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof revie
       const defaults=provider.get()
       // A restored desktop database never enables local executables on a hosted server.
       const pinned=provider.checkAgent&&LOCAL_AGENTS.find(agent=>agent===currentChat.localAgent)
-      config=pinned?{...defaults,agent:pinned}:defaults
+      config=entry?{...defaults,agent:LOCAL_AGENTS.find(name=>name===entry.agent&&(provider.checkAgent||defaults.agent===name))}:pinned?{...defaults,agent:pinned}:defaults
+      if(entry?.agent&&!config.agent)reject(503,'Queued provider unavailable')
       if(!config.agent&&!config.key)reject(503,'Configure the OpenAI provider to start a turn')
-      if(runs.has(chat))reject(409,'A turn is already running in this chat')
+      if(runs.has(chat)||(!entry&&managed&&db.prepare('SELECT 1 FROM chat_queue WHERE chat=? AND error IS NULL').get(chat)))reject(409,'A turn is already running in this chat')
       if(page!==null)body(ws,page)
       attached=[...new Set(references)].filter(id=>id!==page).map(id=>pageSource(body(ws,id)))
       const linkedPages=new Map<number,{title:string;day?:string;blocks:Map<string,DocumentTextBlock>}>()
@@ -296,6 +404,7 @@ export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof revie
         linkedSources.push({id,title:target.title,block,excerpt:textPrefix(item.text,60)||'Empty block'})
       }
       if(missingContext.blocks.length)throw missingContext
+      if(entry&&!db.prepare('DELETE FROM chat_queue WHERE id=? AND revision=?').run(entry.id,entry.revision).changes)reject(409,'Queue entry changed')
       const add=db.prepare('INSERT INTO chat_messages(chat,role,text,status,sources,requester) VALUES(?,?,?,?,?,?)')
       db.prepare("UPDATE chats SET title=? WHERE id=? AND NOT EXISTS(SELECT 1 FROM chat_messages WHERE chat=?)").run(textPrefix(text,64),chat,chat)
       userMessage=Number(add.run(chat,'user',text,'sent',JSON.stringify([...attached,...linkedSources]),actor.account).lastInsertRowid)
@@ -308,13 +417,14 @@ export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof revie
       message=createOnce(db,actor.account,operationId,['turn',ws,chat,turn],acceptTurn,
         id=>!!db.prepare("SELECT 1 FROM chat_messages WHERE chat=? AND id=? AND role='assistant'").get(chat,id))
     }catch(error){
-      if(error!==missingContext)throw error
+      if(error!==missingContext||!res)throw error
       res.writeHead(409,{'Content-Type':'application/json','Cache-Control':'no-store'})
       res.end(JSON.stringify({error:missingContext.message,unavailableBlock:missingContext.blocks[0],unavailableBlocks:missingContext.blocks}))
       return
     }
     if(!userMessage){
       // The stream belongs to the original request. This client can load the recorded response by ID.
+      if(!res)return
       res.writeHead(background?202:200,{'Content-Type':background?'application/json':'application/x-ndjson','Cache-Control':'no-store'})
       res.end(JSON.stringify(background?{task:message,chat,replayed:true}:{message,replayed:true})+'\n')
       return
@@ -328,11 +438,11 @@ export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof revie
     const attachmentSources=new Map<number,Source>()
     const saveSources=()=>db.prepare('UPDATE chat_messages SET sources=? WHERE id=?').run(JSON.stringify([...sources.values(),...linkedSources,...attachmentSources.values()]),message)
     const observers=new Map<ServerResponse,()=>boolean>()
-    const notifySender=(event:object)=>{if(!background&&!res.destroyed)res.write(JSON.stringify(event)+'\n')}
+    const notifySender=(event:object)=>{if(res&&!background&&!res.destroyed)res.write(JSON.stringify(event)+'\n')}
     /** A slow reader catches up from durable history independently of the provider and other readers. */
     function notify(event:object){
       const line=JSON.stringify(event)+'\n'
-      if(!background&&!res.destroyed)res.write(line)
+      if(res&&!background&&!res.destroyed)res.write(line)
       for(const [reader,canRead] of observers){
         if(canRead()&&reader.write(line))continue
         observers.delete(reader);reader.end()
@@ -347,19 +457,19 @@ export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof revie
     }
     // Reserve the chat before the environment starts, including environments that finish synchronously.
     const finished=Promise.resolve().then(executeTurn)
-    runs.set(chat,{workspace:ws,message,observers,controller,canRun,finished})
+    runs.set(chat,{workspace:ws,message,mode,agent:config!.agent,observers,controller,canRun,finished})
     return finished
 
     async function executeTurn(){
       try{
-        if(background){
+        if(res&&background){
           res.writeHead(202,{'Content-Type':'application/json','Cache-Control':'no-store'})
           res.end(JSON.stringify({task:message,chat}))
-        }else{
-          res.once('close',close)
+        }else if(res){
+          if(!managed)res.once('close',close)
           res.writeHead(200,streamHeaders)
         }
-        if(!background&&res.destroyed)controller.abort()
+        if(!managed&&!background&&res?.destroyed)controller.abort()
         requireAccess()
         /** Keep one citation per block. A range read or search can identify a more specific passage. */
         function citeBlock(source:Source){
@@ -397,7 +507,7 @@ export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof revie
           const projects=db.prepare('SELECT id,name,beforeName,parent,parentName,reviewedPath,project,status FROM chat_project_requests WHERE message=? ORDER BY id').all(message) as MessageReviews['projects']
           return {message,edits,pages,projects}
         }
-        const rows=db.prepare("SELECT id,role,status,text AS content,sources,json_extract(pluginDraft,'$.name') AS draftName FROM chat_messages WHERE chat=? AND id<? AND (text<>'' OR status='unknown' OR pluginDraft IS NOT NULL) ORDER BY id DESC LIMIT 24").all(chat,message).reverse() as {id:number;role:'assistant'|'user';status:string;content:string;sources:string;draftName:string|null}[]
+        const rows=db.prepare("SELECT id,role,status,text AS content,sources,json_extract(pluginDraft,'$.name') AS draftName FROM chat_messages WHERE chat=? AND id<? AND (text<>'' OR status IN ('unknown','interrupted','cancelled') OR pluginDraft IS NOT NULL) ORDER BY id DESC LIMIT 24").all(chat,message).reverse() as {id:number;role:'assistant'|'user';status:string;content:string;sources:string;draftName:string|null}[]
         const history=rows.map(({id,role,status,content,sources,draftName},index)=>{
           // A previous link identifies the source to read again. Its old excerpt is not current document text.
           if(role==='user'&&index<rows.length-1){
@@ -408,6 +518,7 @@ export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof revie
             const citations=citedAttachments(JSON.parse(sources))
             if(citations.length)content+='\nCited attachments: '+JSON.stringify(citations)
             if(status==='unknown')content+='\nThe host restarted during this turn. Its final outcome is unknown. Check the recorded decisions and current workspace before taking further action.'
+            if(status==='interrupted'||status==='cancelled')content+='\nThis response was interrupted. Consult its recorded decisions before continuing.'
             if(draftName&&actor.savePlugin)content+='\nSaved plugin draft: '+JSON.stringify({message:id,name:draftName})
             const {edits:decisions,pages,projects}=reviews(id)
             if(pages.length)content+='\nRecorded page creation decisions: '+JSON.stringify(pages)
@@ -447,7 +558,7 @@ export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof revie
           notify({proposal:pending})
           return {applied:pending,...(result&&{page:result.page,block:result.block})}
         }
-        await environment.run({mode,settings:config,history,workspaceCalendar,current,referencedDocuments,referencedBlocks,signal,tools:{
+        await environment.run({registerSteer(handler){const run=runs.get(chat);if(run?.message===message)run.steer=handler},mode,settings:config,history,workspaceCalendar,current,referencedDocuments,referencedBlocks,signal,tools:{
           read,readCanvas,
           editCanvas:allowEdits?input=>{
             requireAccess()
@@ -513,7 +624,7 @@ export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof revie
             })
             return {messages,nextBefore:rows.length>4?messages[3].message:null}
           },
-          openPage:background?undefined:(id,block,surface)=>{
+          openPage:background||!res?undefined:(id,block,surface)=>{
             if(block&&surface)reject(400,'Choose a writing block or Canvas view.')
             const document=read(id,block??0,surface??undefined)
             // Navigation is delivered once to the initiating window. Reopening shared history only shows the citation.
@@ -650,12 +761,16 @@ export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof revie
         const failure=error instanceof HermesSetupError?error.message:config.agent
           ?'Local '+config.agent+' request failed. Check the CLI version, login and connection.'
           :'Provider request failed. Verify the host API key, model, network and quota.'
-        if(signal.reason!=='deleted')notifySender({error:status==='failed'?failure:'Turn interrupted'})
+        if(status==='failed'){
+          if(entry&&getChat.get(chat,ws))db.prepare(`INSERT INTO chat_queue(id,chat,author,payload,origin,plugin,agent,revision,error)
+            VALUES(?,?,?,?,?,?,?,?,?)`).run(entry.id,chat,entry.author,entry.payload,entry.origin,entry.plugin,entry.agent,Number(entry.revision)+1,failure+' Review the response before retrying.')
+          notifySender({error:failure})
+        }
       }finally{
         controller.abort();runs.delete(chat)
         for(const reader of observers.keys())reader.end()
         observers.clear()
-        res.off('close',close);if(!background&&!res.destroyed)res.end()
+        res?.off('close',close);if(res&&!background&&!res.destroyed)res.end()
       }
     }
   }
@@ -668,7 +783,7 @@ export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof revie
       for(const [reader,canRead] of observers)if(!canRead()){observers.delete(reader);reader.end()}
     }
   },async stop(){
-    stopped=true
+    clearInterval(timer);stopped=true
     for(const {controller} of runs.values())controller.abort()
     await Promise.all([...runs.values()].map(run=>run.finished))
   }}

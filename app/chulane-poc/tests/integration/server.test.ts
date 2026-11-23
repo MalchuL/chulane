@@ -258,7 +258,7 @@ test('legacy flat projects remain navigable across migration, subtree trash and 
   async function login(){cookie=(await call('login','POST',{key:'edit'})).headers.get('set-cookie')!.split(';')[0]}
   await login()
   const marked=new DatabaseSync(file,{readOnly:true})
-  try{assert.equal(marked.prepare('PRAGMA user_version').get()!.user_version,6)}finally{marked.close()}
+  try{assert.equal(marked.prepare('PRAGMA user_version').get()!.user_version,7)}finally{marked.close()}
   const upgraded=await(await call('library')).json()
   assert.deepEqual((await(await call('agent')).json()).chats,[{id:5,title:'Old conversation',canDelete:true}])
   const [legacy]=(await(await call('proposals/history')).json()).items
@@ -432,7 +432,7 @@ test('workspace backup restores credentials, settings and membership without dev
   assert.deepEqual(await readdir(backupDir),['workspace.sqlite'])
   const verify=(file:string)=>promisify(execFile)(process.execPath,[command[0]!, '--verify',file])
   const bytes=await readFile(destination)
-  assert.match((await verify(destination)).stdout,/Verified Chulane workspace format 6/)
+  assert.match((await verify(destination)).stdout,/Verified Chulane workspace format 7/)
   assert.deepEqual(await readFile(destination),bytes)
   const damaged=join(dir,'damaged.sqlite')
   await copyFile(destination,damaged)

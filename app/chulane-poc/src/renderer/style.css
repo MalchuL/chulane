@@ -629,3 +629,15 @@ button[data-part=window-brand]:focus-visible {outline:2px solid var(--focus);out
 [data-part=document-participants] span{font-size:.75em;font-variant-numeric:tabular-nums}
 [data-part=scroll-area]:has(>[data-part=participant-list]){max-height:min(16rem,40dvh)}
 [data-part=participant-list] li{overflow-wrap:anywhere}
+
+.agent-panel [data-part=chat-tabs] {display:flex;overflow-x:auto;scrollbar-width:thin;flex:none;padding-inline:12px}
+.agent-panel [data-part=chat-tabs]>span {display:flex;align-items:center;flex:none}
+.agent-panel [data-part=chat-tabs]>span>button:first-child {display:block;max-width:12rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.agent-panel [data-part=queue-row] {display:flex;align-items:center;gap:4px;min-width:0}
+.agent-panel [data-part=queue-row]>span {flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.agent-panel :is([data-part=context-scroll],[data-part=queue-scroll]) {max-block-size:min(16dvh,8rem)}
+.agent-panel [data-part=compose-area] {min-inline-size:0;grid-template-columns:minmax(0,1fr);max-height:65dvh;overflow-y:auto}
+.agent-panel [data-part=composer] {min-width:0}
+.agent-panel [data-part=context-scroll]>div,.agent-panel [data-part=queue-scroll]>div {display:block!important;min-width:0!important}
+.agent-panel [data-part=block-link] a span {overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.agent-panel [data-slot=textarea] {width:100%;min-width:0;max-inline-size:100%}

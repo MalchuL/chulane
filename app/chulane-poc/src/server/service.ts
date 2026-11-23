@@ -142,7 +142,7 @@ export async function serve({savePlugin,rendererModules,file,assets,host='127.0.
     if(tag)return tagSearchHits(tags.namedSources(ws,tag),scope)
     return searchWorkspace(db,documents.liveText,scope==='pages'?textRetriever:retriever,ws,query,scope)
   }
-  const agent=workspaceAgent(db,documents,search,tags.readProperties,!desktop&&installationProvider?{get:()=>installationProvider.get()}:provider,backgroundEnvironment)
+  const agent=workspaceAgent(db,documents,search,tags.readProperties,!desktop&&installationProvider?{get:()=>installationProvider.get()}:provider,backgroundEnvironment,desktop?savePlugin:undefined)
   recordWorkspaceFormat(db,version)
   const agentPlugin=context?.plugin(function chatService(scope){
     scope.provide('workspaceAgent',agent)

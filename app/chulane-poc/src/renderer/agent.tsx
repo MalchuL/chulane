@@ -6,13 +6,13 @@ import {AgentMessage} from './agent-message'
 import {Disclosure} from './ui/disclosure'
 import {useContext,useEffect,useImperativeHandle,useMemo,useRef,useState} from 'react'
 import {useDragDropMonitor,useDroppable} from '@dnd-kit/react'
-import {ArrowUp,ArrowUpRight,BookOpen,Check,Clock3,Download,FileText,FolderPlus,Layers,Link2,MessageSquare,Paperclip,Pencil,Plus,Settings2,Square,Trash2,Users,X} from 'lucide-react'
+import {ArrowUp,ArrowUpRight,BookOpen,Check,Clock3,Download,FileText,FolderPlus,Layers,Link2,MessageSquare,CornerUpRight,Paperclip,Pencil,Plus,Settings2,Square,Trash2,Users,X} from 'lucide-react'
 import {labeledReferences} from '../shared/library'
 import {SidebarHandle} from './sidebar-handle'
 import {ScrollArea} from './ui/scroll-area'
 import {Command,CommandInput,CommandItem,CommandList,CommandEmpty,ErrorAlert,Badge,Button,Dialog,DialogClose,DialogContent,DialogFooter,DialogTitle,DialogTrigger,Input,Label,NativeSelect,NativeSelectOption,Popover,PopoverContent,PopoverTrigger,Textarea} from './ui'
 import {BLOCK_REFERENCE,BlockLinkComposer} from './block-links'
-import {sourceHref,MAX_BLOCK_LINKS,MAX_PAGE_REFERENCES,type ChatActivity,type BlockSource,type LocalAgent} from '../shared/agent'
+import {sourceHref,MAX_BLOCK_LINKS,MAX_PAGE_REFERENCES,type QueuedTurn,type ChatActivity,type BlockSource,type LocalAgent} from '../shared/agent'
 import {CHAT_COMPOSER,PAGE_REFERENCE} from './page-drag'
 import {ProposalHistory,ReviewDestination} from './proposal-history'
 import {AgentTasks} from './agent-tasks'
@@ -44,22 +44,35 @@ function canvasDescription(json:string){
   return [type,text&&'“'+text+'”',width+' × '+height,'at ('+x+', '+y+')'].filter(Boolean).join(' · ')
 }
 type DraftBlockLink=BlockSource & {unavailable?:boolean}
+type QueuedEdit={entry:QueuedTurn;draft:ComposerDraft;caret:[number,number]}
 type ComposerDraft={text:string;attachments:Pick<Source,'id'|'title'>[];blockLinks:DraftBlockLink[];background:boolean}
 const emptyDraft:ComposerDraft={text:'',attachments:[],blockLinks:[],background:false}
 const PANEL='agent-panel',LOG='agent-log',REVIEW='agent-review'
 /** Render shared history, model setup, streamed text and durable block-level review. */
 export function AgentSidebar({permissionScope,surface,receiveEdit,pageLabel,destinationPath,openProject,downloadAttachment,ws,pages,page,write,offline,visible,close,open,checkpoint,applyPageEdit}:Props){
   const pageById=useMemo(()=>new Map(pages.map(source=>[source.id,source])),[pages])
-  const [settings,S]=useState<Settings>(),[chat,C]=useState(0),[view,V]=useState<Conversation>({messages:[],edits:[],projects:[],pages:[]})
+  const storageKey='chulane.chat-tabs.'+permissionScope
+  const [saved]=useState(()=>{try{return JSON.parse(localStorage.getItem(storageKey)??'null') as {chat:number;tabs:number[];drafts:Record<number,ComposerDraft>;seen:Record<number,number>;edits?:Record<number,QueuedEdit>}|null}catch{return null}})
+  const chooseInitial=useRef(!saved)
+  const [tabs,setTabs]=useState<number[]>(saved?.tabs??[])
+  const [seen,setSeen]=useState<Record<number,number>>(saved?.seen??{})
+  const [settings,S]=useState<Settings>(),[chat,C]=useState(saved?.chat??0),[view,V]=useState<Conversation>({messages:[],edits:[],projects:[],pages:[]})
   const [busy,B]=useState(false),[error,E]=useState(''),[setup,G]=useState(false),[key,K]=useState(''),[model,M]=useState(''),[notice,N]=useState('')
   const [refreshError,setRefreshError]=useState('')
-  const [drafts,setDrafts]=useState<Record<number,ComposerDraft>>({})
-  const {text:draft,attachments,blockLinks,background}=drafts[chat]??emptyDraft
+  const [drafts,setDrafts]=useState<Record<number,ComposerDraft>>(saved?.drafts??{})
+  const [edits,setEdits]=useState<Record<number,QueuedEdit>>(saved?.edits??{})
+  const editing=edits[chat]
+  const currentDraft=editing?.draft??drafts[chat]??emptyDraft
+  const {text:draft,attachments,blockLinks,background}=currentDraft
+  const queue=view.queue??[]
+  const staleEdit=!!editing&&!!view.queue&&!queue.some(row=>row.id===editing.entry.id&&row.revision===editing.entry.revision)
+  useEffect(()=>{try{localStorage.setItem(storageKey,JSON.stringify({tabs,chat,drafts,seen,edits}))}catch{/* Storage may be unavailable. */}},[tabs,chat,drafts,seen,edits,storageKey])
   const initial=drafts[0]
   const hasInitialDraft=!!(initial&&(initial.text||initial.attachments.length||initial.blockLinks.length||initial.background))
   const canWriteChat=write&&!offline
   /** Keep unsent text and explicit context local to the selected conversation. */
   function updateDraft(patch:Partial<ComposerDraft>){
+    if(editing){setEdits(all=>({...all,[chat]:{...editing,draft:{...editing.draft,...patch}}}));return}
     setDrafts(current=>({...current,[chat]:{...(current[chat]??emptyDraft),...patch}}))
   }
   const result=useRef<number|null>(null)
@@ -75,13 +88,15 @@ export function AgentSidebar({permissionScope,surface,receiveEdit,pageLabel,dest
   const [switching,setSwitching]=useState(false),[savingPlugin,setSavingPlugin]=useState(false)
   const pinned=settings?.chats.find(item=>item.id===chat)?.agent
   const ready=!!(settings?.configured||pinned)
-  const active=useRef<AbortController|null>(null),selected=useRef(0),alive=useRef(true),sequence=useRef(0)
+  const active=useRef<AbortController|null>(null),selected=useRef(chat),alive=useRef(true),sequence=useRef(0)
+  const streams=useRef(new Map<number,AbortController>())
   const observer=useRef<AbortController|null>(null)
   const [dragging,drag]=useState(false),[picker,P]=useState(false)
   const pickedPage=useRef(false)
   const composer=useRef<HTMLTextAreaElement>(null),log=useRef<HTMLDivElement>(null),follow=useRef(true)
   const attachedIds=new Set(attachments.map(source=>source.id))
-  const missingPage=[...attachments,...blockLinks].some(source=>!pageById.has(source.id))
+  const contextPage=editing?pageById.get(editing.entry.turn.page??0):page
+  const missingPage=!!(editing?.entry.turn.page&&!contextPage)||[...attachments,...blockLinks].some(source=>!pageById.has(source.id))
   const panel=useRef<HTMLElement>(null)
   const {isDropTarget}=useDroppable({id:CHAT_COMPOSER,element:panel,accept:[PAGE_REFERENCE,BLOCK_REFERENCE],disabled:!visible||!write||busy})
   /** Keep an explicit attachment even while it is also the active document. */
@@ -131,27 +146,29 @@ export function AgentSidebar({permissionScope,surface,receiveEdit,pageLabel,dest
   const path=(id:number)=>'agent/chats/'+id
   async function settingsNow(){const data:Settings=await json('agent'+suffix);if(alive.current)S(data);return data}
   async function load(id:number){
-    const seq=++sequence.current
+    const seq=selected.current===id?++sequence.current:sequence.current
     try{
       const data:Conversation=await json(path(id)+suffix)
       if(alive.current&&selected.current===id&&sequence.current===seq)V(data)
       return data
     }catch(error){
       if((error as {status?:number}).status!==404)throw error
-      if(alive.current&&selected.current===id&&sequence.current===seq)select(0)
+      if(alive.current&&selected.current===id&&sequence.current===seq)select(tabs.filter(tab=>tab!==id).at(-1)??0)
     }
   }
-  function select(id:number){N('');E('');P(false);follow.current=true;selected.current=id;C(id);V({messages:[],edits:[],projects:[],pages:[]});if(id)void load(id).catch(e=>E(e.message))}
-  useEffect(()=>{alive.current=true;return()=>{alive.current=false;active.current?.abort()}},[])
+  function select(id:number){chooseInitial.current=false;if(id)setTabs(previous=>previous.includes(id)?previous:[...previous,id]);N('');E('');P(false);follow.current=true;selected.current=id;C(id);V({messages:[],edits:[],projects:[],pages:[]});if(id)void load(id).catch(e=>E(e.message))}
+  useEffect(()=>{alive.current=true;return()=>{alive.current=false;active.current?.abort();for(const stream of streams.current.values())stream.abort()}},[])
   useEffect(()=>{
     if(!visible||offline)return
     let live=true
-    async function refresh(){try{const data=await settingsNow();if(!live)return
+    async function refresh(){try{const before=selected.current;const data=await settingsNow();if(!live||before!==selected.current||active.current)return
       if(!data.chats.some(item=>item.id===selected.current)){
-        const next=hasInitialDraft?0:data.chats[0]?.id??0
+        const next=selected.current||chooseInitial.current&&!hasInitialDraft?data.chats[0]?.id??0:0
+        chooseInitial.current=false
         if(selected.current!==next)select(next)
       }
-      else if(selected.current && !active.current && !observer.current)await load(selected.current)
+      else if(selected.current)await load(selected.current)
+      if(live)setTabs(open=>open.some(id=>!data.chats.some(item=>item.id===id))?open.filter(id=>data.chats.some(item=>item.id===id)):open)
       if(live)setRefreshError('')
     }catch(e){if(live)setRefreshError((e as Error).message)}}
     void refresh();const timer=setInterval(refresh,2500)
@@ -168,7 +185,7 @@ export function AgentSidebar({permissionScope,surface,receiveEdit,pageLabel,dest
       while((newline=buffer.indexOf('\n'))>=0){
         const event=JSON.parse(buffer.slice(0,newline));buffer=buffer.slice(newline+1)
         if(signal.aborted||!alive.current)return
-        if(selected.current!==id)continue
+        if(selected.current!==id){if(event.appliedEdit&&initiator)await receiveEdit(event.appliedEdit);continue}
         if(event.openPage&&initiator){
           try{await currentOpen.current(event.openPage,signal)}catch(error){if(!signal.aborted)E((error as Error).message)}
         }
@@ -199,7 +216,7 @@ export function AgentSidebar({permissionScope,surface,receiveEdit,pageLabel,dest
     }
   }
   useEffect(()=>{
-    if(!visible||offline||busy||!chat||!runningMessage)return
+    if(!visible||offline||busy||!chat||!runningMessage||streams.current.has(chat))return
     const controller=new AbortController(),{signal}=controller
     let retry:ReturnType<typeof setTimeout>
     /** Reconnect to the same running turn after a network interruption. */
@@ -220,7 +237,7 @@ export function AgentSidebar({permissionScope,surface,receiveEdit,pageLabel,dest
     return()=>{controller.abort();clearTimeout(retry)}
   },[visible,offline,busy,chat,runningMessage,ws])
   const creation=useCreationRequest()
-  const pendingTurns=useRef(new Map<number,{signature:string;operationId:string}>())
+  const pendingTurns=useRef(new Map<number,{signature:string;operationId:string;queued:boolean}>())
   /** The first server-created chat takes ownership of the initial unsent composer. */
   async function newChat(agent?:LocalAgent){
     const first=selected.current===0
@@ -235,45 +252,81 @@ export function AgentSidebar({permissionScope,surface,receiveEdit,pageLabel,dest
       const {0:initial,...rest}=current
       return {...rest,[id]:initial}
     })
-    select(id);await settingsNow()
+    await settingsNow();select(id)
     return id as number
   }
+  useEffect(()=>{
+    const latest=settings?.chats.find(item=>item.id===chat)?.latest
+    if(visible&&latest)setSeen(prev=>prev[chat]===latest?prev:{...prev,[chat]:latest})
+  },[visible,chat,settings])
+  function editEntry(entry:QueuedTurn){
+    const t=entry.turn
+    const title=(id:number)=>pageById.get(id)?.title??('Page #'+id)
+    setEdits(all=>({...all,[chat]:{entry,caret:[composer.current?.selectionStart??0,composer.current?.selectionEnd??0],
+      draft:{text:t.text,background:t.background,attachments:t.references.map(id=>({id,title:title(id)})),blockLinks:t.blockLinks.map(link=>({...link,title:title(link.id),excerpt:link.excerpt??link.block}))}}}))
+    composer.current?.focus()
+  }
+  function finishEdit(){
+    setEdits(all=>{const next={...all};delete next[chat];return next})
+    requestAnimationFrame(()=>{if(selected.current===chat&&editing){composer.current?.focus();composer.current?.setSelectionRange(...editing.caret)}})
+  }
   async function send(){
-    if(!canWriteChat || !ready || active.current || switching || running || missingPage || !draft.trim())return
+    if(editing&&!view.queue)return
+    if(!canWriteChat || !ready || active.current || switching || missingPage || !draft.trim())return
     // Follow this turn until the reader scrolls away, including while delivery is pending.
     follow.current=true
     const controller=new AbortController();active.current=controller;B(true);E('')
     let id=chat
     try{
       const sources=[...attachments,...blockLinks].map(source=>source.id)
-      if(page)sources.push(page.id)
+      const originPage=editing?editing.entry.turn.page:page?.id??null
+      if(originPage)sources.push(originPage)
       try{await checkpoint(sources,controller.signal)}
       catch(error){throw Error('Could not sync the documents for this message. '+(error as Error).message+' Send again to retry.')}
       controller.signal.throwIfAborted()
       if(!id)id=await newChat()
-      const turn={mode,allowEdits:mode!=='ask',surface,background,text:draft,page:page?.id??null,references:attachments.map(p=>p.id).filter(id=>id!==page?.id),blockLinks:blockLinks.map(({id,block})=>({id,block}))}
+      const turnMode=editing?.entry.turn.mode??mode
+      const turn={mode:turnMode,allowEdits:turnMode!=='ask',surface:editing?.entry.turn.surface??surface,background,text:draft,page:originPage,references:attachments.map(p=>p.id).filter(id=>id!==originPage),blockLinks:blockLinks.map(({id,block,excerpt})=>({id,block,excerpt}))}
       const signature=JSON.stringify(turn)
       let delivery=pendingTurns.current.get(id)
       if(delivery?.signature!==signature){
-        delivery={signature,operationId:metadataOperationId()}
+        delivery={signature,operationId:metadataOperationId(),queued:!!(running||streams.current.has(id)||queue.some(item=>!item.error)||editing)}
         pendingTurns.current.set(id,delivery)
       }
-      const response=await request(path(id)+'/turn'+suffix,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...turn,operationId:delivery.operationId}),signal:controller.signal})
+      if(editing&&!staleEdit){
+        await json(path(id)+'/queue/'+editing.entry.id+'/edit'+suffix,'POST',{...turn,revision:editing.entry.revision})
+        pendingTurns.current.delete(id);finishEdit();return
+      }
+      const enqueue=()=>json(path(id)+'/queue'+suffix,'POST',{...turn,operationId:delivery!.operationId})
+      let response:Response|undefined
+      if(delivery!.queued)await enqueue()
+      else try{
+        response=await request(path(id)+'/turn'+suffix,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...turn,managed:true,operationId:delivery.operationId}),signal:controller.signal})
+      }catch(error){
+        if((error as Error).message!=='A turn is already running in this chat')throw error
+        delivery!.queued=true;await enqueue()
+      }
       pendingTurns.current.delete(id)
-      setDrafts(current=>{
-        const {[id]:submitted,...rest}=current
-        // Typing can continue while the checkpoint or host acknowledgement is pending.
-        if(submitted&&submitted.text!==draft)rest[id]={...emptyDraft,text:submitted.text}
-        return rest
+      if(editing)finishEdit()
+      else setDrafts(current=>{
+        if(current[id]!==currentDraft)return current
+        const next={...current};delete next[id];return next
       })
       N('')
-      if(response.status===202){N((await response.json()).replayed?'Background task already submitted.':'Background task started.');return}
-      await readTurn(response,id,controller.signal,true)
+      if(response?.status===202){N((await response.json()).replayed?'Background task already submitted.':'Background task started.');return}
+      if(response){
+        streams.current.set(id,controller)
+        void readTurn(response,id,controller.signal,true).catch(e=>{if(selected.current===id&&!controller.signal.aborted)E(e.message)}).finally(()=>{
+          streams.current.delete(id)
+          if(alive.current&&selected.current===id)void load(id).catch(e=>E(e.message))
+        })
+      }
     }catch(e){
       if(alive.current&&!controller.signal.aborted){
         const failure=e as Error & {unavailableBlocks?:Pick<BlockSource,'id'|'block'>[]}
         const missing=new Set(failure.unavailableBlocks?.map(link=>link.id+'/'+link.block))
-        if(missing.size)setDrafts(current=>{
+        if(missing.size&&editing)updateDraft({blockLinks:blockLinks.map(link=>({...link,unavailable:missing.has(link.id+'/'+link.block)}))})
+        else if(missing.size)setDrafts(current=>{
           const saved=current[id]
           if(!saved)return current
           return {...current,[id]:{...saved,blockLinks:saved.blockLinks.map(link=>({...link,unavailable:missing.has(link.id+'/'+link.block)}))}}
@@ -360,10 +413,16 @@ export function AgentSidebar({permissionScope,surface,receiveEdit,pageLabel,dest
           pendingTurns.current.delete(chat)
           setDrafts(current=>{const {[chat]:removed,...rest}=current;return rest})
           const data=await settingsNow()
-          if(selected.current===chat)select(data.chats[0]?.id??0)
+          if(selected.current===chat||!selected.current)select(tabs.filter(tab=>tab!==chat&&data.chats.some(item=>item.id===tab)).at(-1)??data.chats[0]?.id??0)
         })}>Delete conversation</Button></DialogClose></DialogFooter></DialogContent></Dialog>}
       {write&&<Button size="icon-sm" variant="ghost" title="New chat" aria-label="New chat" disabled={busy||switching||offline} onClick={()=>act(newChat)}><Plus/></Button>}
     </div>
+    <nav data-part="chat-tabs" aria-label="Open conversations">{tabs.flatMap(id=>{
+      const item=settings?.chats.find(c=>c.id===id)
+      if(!item)return []
+      return <span key={id}><Button size="sm" variant={chat===id?'secondary':'ghost'} aria-current={chat===id?'page':undefined} title={item.title} onClick={()=>select(id)}>{item.title}{item.running?' …':''}{item.queued?' ('+item.queued+')':''}{chat!==id&&(item.latest??0)>(seen[id]??0)?' •':''}</Button>
+        <Button size="icon-sm" variant="ghost" aria-label={'Close tab '+item.title} title="Close tab" onClick={()=>{const next=tabs.filter(tab=>tab!==id);setTabs(next);if(chat===id)select(next.at(-1)??0)}}><X size={12}/></Button></span>
+    })}</nav>
     <ScrollArea role="log" aria-label="Chat messages" className={LOG} ref={log} onClick={event=>{
       if(event.defaultPrevented||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey||event.button!==0)return
       const anchor=event.target instanceof Element?event.target.closest('[data-part=agent-markdown] a[href]'):null
@@ -439,17 +498,25 @@ export function AgentSidebar({permissionScope,surface,receiveEdit,pageLabel,dest
     </ScrollArea>
     <footer data-part="compose-area">
     {offline?<small role="status">{write?'Reconnect to send a message.':'Reconnect to load shared conversations.'}</small>:(error||refreshError)&&<ErrorAlert message={error||refreshError}/>}
+    {editing&&<small role="status">{staleEdit?'Message changed or started. Queue your edit as new.':'Editing queued message'}</small>}
     {notice&&<small role="status">{notice}</small>}
+    {!!queue.length&&<ScrollArea data-part="queue-scroll" aria-label="Queued messages">{queue.map(item=><div data-part="queue-row" key={item.id}>
+      <span title={item.turn.text}>{item.turn.text}</span><small title="Attached references">{item.turn.references.length+item.turn.blockLinks.length}</small>
+      {item.error&&<small role="alert">{item.error}</small>}{write&&item.mine&&<>
+        <Button type="button" size="icon-sm" variant="ghost" aria-label="Edit queued message" title="Edit queued message" disabled={!!editing||busy} onClick={()=>editEntry(item)}><Pencil/></Button>
+        <Button type="button" size="icon-sm" variant="ghost" aria-label="Steer now" title="Steer now" disabled={!view.canStop||!running||!!item.error} onClick={()=>act(async()=>{await json(path(chat)+'/queue/'+item.id+'/steer'+suffix,'POST',{revision:item.revision,message:runningMessage});await load(chat)})}><CornerUpRight/></Button>
+        <Button type="button" size="icon-sm" variant="ghost" aria-label="Delete queued message" title="Delete queued message" onClick={()=>act(async()=>{await json(path(chat)+'/queue/'+item.id+'/delete'+suffix,'POST',{revision:item.revision});await load(chat)})}><Trash2/></Button>
+      </>}</div>)}</ScrollArea>}
     {write?<form aria-label="Chat composer" data-part="composer" data-drag={busy?'disabled':isDropTarget?'over':dragging?'ready':'idle'} onSubmit={e=>{e.preventDefault();void send()}}>
       <span className="sr-only" role="status" aria-label="Attached context">
         {attachments.length} {attachments.length===1?'page':'pages'} and {blockLinks.length} {blockLinks.length===1?'block link':'block links'} attached.
       </span>
-      <ScrollArea data-part="context-scroll" aria-label="Message context"><div data-part="context"><small>Context</small>{page&&!attachedIds.has(page.id)&&<Badge variant="secondary" title={'Current document: '+pageLabel(page)}><FileText size={12}/>{pageLabel(page)}{surface==='canvas'?' · Canvas':''}</Badge>}
+      <ScrollArea data-part="context-scroll" aria-label="Message context"><div data-part="context"><small>Context</small>{contextPage&&!attachedIds.has(contextPage.id)&&<Badge variant="secondary" title={'Current document: '+pageLabel(contextPage)}><FileText size={12}/>{pageLabel(contextPage)}{(editing?.entry.turn.surface??surface)==='canvas'?' · Canvas':''}</Badge>}
       {attachments.map(attachment=>{
         const available=pageById.get(attachment.id)
         const source=available??attachment
         const label=available?pageLabel(available):source.title+' · #'+source.id+' (unavailable)'
-        const current=source.id===page?.id
+        const current=source.id===contextPage?.id
         return <Button type="button" key={source.id} size="sm" variant={current?'secondary':'outline'} disabled={busy}
           title={current?'Current document: '+label:'Remove '+label} aria-label={'Remove '+label}
           aria-description={current?'Remove the attachment. The active document stays in context.':undefined}
@@ -471,12 +538,13 @@ export function AgentSidebar({permissionScope,surface,receiveEdit,pageLabel,dest
             onClick={()=>{updateDraft({blockLinks:blockLinks.filter(item=>item!==s)});N('');composer.current?.focus()}}><X size={12}/></Button>
         </span>
       })}
-      {!page&&!blockLinks.length&&!attachments.length&&<small>Workspace library</small>}</div></ScrollArea>
+      {!contextPage&&!blockLinks.length&&!attachments.length&&<small>Workspace library</small>}</div></ScrollArea>
       {missingPage?<small role="status">Restore the unavailable page or remove its links before sending.</small>
         :blockLinks.some(link=>link.unavailable)&&<small role="status">Restore the unavailable blocks and retry, or remove their links.</small>}
       <Textarea ref={composer} aria-label="Message the agent" enterKeyHint="send" title="Enter sends. Shift+Enter, Alt+Enter, or Ctrl+Enter adds a new line."
         placeholder={dragging?'Drop context here…':'Ask about your pages…'} rows={2} maxLength={12000} value={draft} onChange={e=>updateDraft({text:e.target.value})}
         onKeyDown={event=>{
+          if(event.key==='Escape'&&editing&&!busy){event.preventDefault();finishEdit();return}
           if(event.key!=='Enter'||event.nativeEvent.isComposing||event.nativeEvent.keyCode===229||event.metaKey)return
           if(event.ctrlKey||event.altKey){
             event.preventDefault()
@@ -501,12 +569,14 @@ export function AgentSidebar({permissionScope,surface,receiveEdit,pageLabel,dest
                 onSelect={()=>addPage(item.id)}><FileText/><span>{pageLabel(item)}</span></CommandItem>)}
             </CommandList></ScrollArea>
           </Command></PopoverContent></Popover>
-        <Button type="button" variant="ghost" size="icon-sm" aria-label="Run in background" aria-pressed={background} disabled={busy||running}
+        <Button type="button" variant="ghost" size="icon-sm" aria-label="Run in background" aria-pressed={background} disabled={busy}
           title="Run in background after closing this window" onClick={()=>updateDraft({background:!background})}><Clock3/></Button>
-        <AgentModePicker mode={mode} disabled={busy} onChange={next=>{
+        <AgentModePicker mode={editing?.entry.turn.mode??mode} disabled={busy||!!editing} onChange={next=>{
           setMode(next);sessionStorage.setItem(permissionKey,next)
         }}/>
-        {busy?<Button type="button" size="icon-sm" aria-label="Stop response" title="Stop response" onClick={()=>active.current?.abort()}><Square/></Button>:<Button size="icon-sm" aria-label="Send" title="Send" disabled={offline||switching||running||missingPage||!draft.trim()||!ready}><ArrowUp/></Button>}</div>
+        {editing&&<Button type="button" variant="ghost" size="icon-sm" title="Cancel edit" aria-label="Cancel edit" onClick={finishEdit}><X/></Button>}
+        {running&&view.canStop&&<Button type="button" size="icon-sm" aria-label="Stop response" title="Stop response" onClick={()=>act(()=>json(path(chat)+'/stop'+suffix,'POST',{message:runningMessage}))}><Square/></Button>}
+        <Button size="icon-sm" aria-label={editing?(staleEdit?'Queue as new':'Save queued message'):running?'Queue message':'Send'} title={editing?(staleEdit?'Queue as new':'Save queued message'):running?'Queue message':'Send'} disabled={busy||offline||switching||missingPage||!draft.trim()||!ready}>{editing?<Check/>:<ArrowUp/>}</Button></div>
     </form>:<small>Read-only conversation</small>}
     {settings&&ready&&write&&settings.localAgents.length>0?<div data-part="chat-provider"><Label htmlFor="chat-agent">Agent for this chat</Label>
       <NativeSelect id="chat-agent" value={pinned??''} size="sm" disabled={offline||busy||running||switching} onChange={event=>{
