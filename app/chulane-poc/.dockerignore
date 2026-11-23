@@ -9,10 +9,4 @@
 !dist-host/web-runtime/
 !dist-host/web-runtime/node_modules/
 !dist-host/web-runtime/node_modules/**
-
-!src/
-!src/tools/
-!src/tools/backup.ts
-
-!src/server/
-!src/server/workspace-database.ts
+!dist-host/backup.mjs

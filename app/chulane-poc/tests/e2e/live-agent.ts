@@ -1,4 +1,5 @@
 /** Optional paid-provider acceptance check. Uses disposable workspaces and synthetic notes. */
+import {chooseAgentMode} from './choose-agent-mode'
 import * as Y from 'yjs'
 import {YjsDoc} from '@chulane/crdt-doc'
 import {DocumentModelImpl} from '@chulane/document-model'
@@ -17,9 +18,9 @@ try{
   const other=(await call('register',{username:'colleague',password:randomUUID()})).headers.get('set-cookie')!.split(';')[0]!
   const foreign=await(await call('workspaces',{name:'Private field notes'},other)).json()
   const label='Survey receipt',code=randomUUID(),privateCode=randomUUID()
-  const hidden=await(await call('pages?workspace='+foreign.id,{title:label,content:privateCode},other)).json()
-  assert.equal((await call('source?workspace='+foreign.id+'&id='+hidden.id)).status,404)
   const marker='Station '+randomUUID()
+  const hidden=await(await call('pages?workspace='+foreign.id,{title:label,content:marker+'. '+privateCode},other)).json()
+  assert.equal((await call('source?workspace='+foreign.id+'&id='+hidden.id)).status,404)
   const receipt=await(await call('pages',{title:label,content:'Awaiting field observation'})).json()
   const browser=await chromium.launch()
   try{
@@ -30,12 +31,15 @@ try{
     await author.goto(host.url+'/?workspace=1&page='+receipt.id)
     const field=author.locator('[data-block-content]').first()
     await expect(field).toHaveText('Awaiting field observation')
-    await field.fill(marker+'. '+'Field observation. '.repeat(700)+code)
+    const text=marker+'. '+'Field observation. '.repeat(700)+code
+    await field.fill(text)
+    const block=await field.locator('xpath=ancestor-or-self::*[@data-block-id][1]').getAttribute('data-block-id')
+    assert.ok(block)
     await expect.poll(async()=>(await(await call('source?id='+receipt.id+'&blocks=1')).json()).text).toContain(code)
     assert.equal((await(await call('library')).json()).pages.find(item=>item.id===receipt.id).plain,'Awaiting field observation')
     await page.goto(host.url+'/?workspace=1')
     await page.getByRole('button',{name:'Agent',exact:true}).click()
-    await page.getByRole('combobox',{name:'Agent permissions'}).selectOption('ask')
+    await chooseAgentMode(page,'Ask')
     await page.getByLabel('Message the agent').fill('Search page text for the exact phrase "'+marker+'", open the matching page in my editor, then quote the full receipt code recorded at the very end of its long paragraph.')
     await page.getByRole('button',{name:'Send',exact:true}).click()
     const answer=page.locator('article[data-author="assistant"]')
@@ -49,7 +53,15 @@ try{
     assert.equal(reply.status,'complete')
     assert.ok(reply.sources.every(source=>source.id!==hidden.id))
     assert.deepEqual(lookupView.edits,[])
-    assert.ok(reply.sources.some(source=>source.id===receipt.id&&source.block&&source.excerpt.includes(marker)))
+    // A passage read replaces the search excerpt for this block. Verify its anchor in the live text.
+    const passage=reply.sources.find(source=>source.id===receipt.id&&source.block===block)
+    assert.equal(passage?.readFrom?.block,block)
+    assert.ok(passage.excerpt)
+    const start=passage.readFrom.offset-passage.excerptOffset
+    assert.ok(Number.isInteger(start)&&start>=0)
+    assert.equal(text.slice(start,start+passage.excerpt.length),passage.excerpt)
+    const blockLink=answer.getByRole('link',{name:label+' · '+passage.excerpt,exact:true})
+    await expect(blockLink).toHaveAttribute('href','?'+new URLSearchParams({workspace:'1',page:String(receipt.id),block}))
     console.log('Live provider found the published block from another editor and opened its page.')
     await expect(page.getByRole('heading',{name:label,exact:true})).toBeVisible()
     await expect(page.locator('.page-surface')).toContainText(code)
@@ -84,6 +96,45 @@ try{
     await expect(page.getByRole('radio',{name:'Canvas',exact:true})).toHaveAttribute('aria-checked','true')
     await expect(answer.last().getByRole('link',{name:/Tide chart/}).first()).toHaveAttribute('href','?workspace=1&page='+canvasPage.id+'&view=canvas')
     console.log('Live provider opened the matching canvas and cited the gauge identifier.')
+
+    const side=page.getByRole('complementary',{name:'Workspace agent'})
+    await side.getByRole('button',{name:'New chat'}).click()
+    await chooseAgentMode(page,'Suggest')
+    const seal=randomUUID()
+    const before='Receiving station: PENDING',issued='Issuing station: '+seal
+    const attached:{id:number;block:string}[]=[]
+    // Both pages have the same title. The receiving block is outside the active editor at send time.
+    const records=await Promise.all([before,issued].map(async content=>{
+      const response=await call('pages',{title:'Transfer record',content})
+      assert.equal(response.status,200)
+      return {id:(await response.json()).id as number,content}
+    }))
+    for(const record of records){
+      await page.getByRole('region',{name:'Pages in this view'}).getByRole('button',{name:'Transfer record · #'+record.id,exact:true}).click()
+      const article=page.locator('article[data-source-page="'+record.id+'"]:visible')
+      const field=article.locator('[data-block-content]').first()
+      await expect(field).toHaveText(record.content)
+      const block=await field.evaluate(node=>node.closest<HTMLElement>('[data-block-id]')!.dataset.blockId!)
+      attached.push({id:record.id,block})
+      await article.getByRole('button',{name:'Attach block links to chat'}).first().click()
+    }
+    const target=attached[0]!
+    await expect(side.getByRole('status',{name:'Attached context'})).toContainText('2 block links')
+    await side.getByLabel('Message the agent').fill('Use the two attached blocks. Propose replacing only PENDING in the receiving station block with the exact code from the issuing station block. Preserve the rest of both blocks.')
+    await side.getByRole('button',{name:'Send',exact:true}).click()
+    const replacement=before.replace('PENDING',seal)
+    const proposal=side.getByRole('region',{name:'Replace block text'})
+    await expect(proposal.locator('ins')).toHaveText(replacement,{timeout:185000})
+    await expect(proposal.locator('del')).toHaveText(before)
+    const chatId=await side.getByLabel('Conversation',{exact:true}).inputValue()
+    const history=await(await call('agent/chats/'+chatId)).json()
+    assert.deepEqual(history.messages.find(m=>m.role==='user').sources.map(({id,block})=>({id,block})),attached)
+    assert.deepEqual(history.edits.map(({page,block,status})=>({id:page,block,status})),[{...target,status:'pending'}])
+    assert.equal((await(await call('source?id='+target.id)).json()).text,before)
+    await proposal.getByRole('button',{name:'Apply',exact:true}).click()
+    await expect.poll(async()=>(await(await call('source?id='+target.id)).json()).text).toBe(replacement)
+    assert.equal((await(await call('source?id='+attached[1]!.id)).json()).text,issued)
+    console.log('Live provider used both attached blocks and proposed one edit on the intended page.')
   }finally{await browser.close()}
   const current=await(await call('pages',{title:'Decision',content:'The launch date is July 8.'})).json()
   const parent=await(await call('projects',{name:'Field study'})).json()

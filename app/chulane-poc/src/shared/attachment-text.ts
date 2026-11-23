@@ -1,26 +1,27 @@
-/** Extract and cite the same UTF-8 attachment text on the server and on offline devices. */
+/** Extract and cite the same Unicode attachment text on the server and on offline devices. */
+import {decodeTextFile} from './text-file.ts'
+
 export const tabularFormats=['csv','tsv']
 export const attachmentFormats=['txt','md','markdown',...tabularFormats]
-const utf8=new TextDecoder('utf-8',{fatal:true})
 
 /** Select text formats before reading cached attachment bodies. */
 export function supportsAttachmentText(name:string){
   return attachmentFormats.some(extension=>name.toLowerCase().endsWith('.'+extension))
 }
 
-/** Accept UTF-8 writing files. Unsupported formats and binary data still upload and download normally. */
+/** Accept UTF-8 and byte-order-marked UTF-16 writing files. Unsupported formats and binary data still upload and download normally. */
 export function attachmentText(name:string,bytes:Uint8Array):string|null{
   if(!supportsAttachmentText(name))return null
   try{
-    const text=utf8.decode(bytes)
+    const text=decodeTextFile(bytes)
     return /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(text)?null:text
   }catch{return null}
 }
 
-/** Return the search excerpt and the Unicode code-point offset accepted by the attachment reader. */
-export function attachmentExcerpt(text:string,literal:RegExp){
-  const index=text.search(literal)
-  if(index<0)return
+/** Prefer a matching passage and its Unicode offset. A filename alone can identify any stored file. */
+export function attachmentMatch(name:string,text:string|null,literal:RegExp){
+  const index=text?.search(literal)??-1
+  if(text===null||index<0)return literal.test(name)?{matchedFilename:true as const,excerpt:''}:undefined
   // RegExp reports UTF-16 indices. SQLite substr advances by Unicode code points.
   let matchOffset=index
   const firstSurrogate=text.slice(0,index).search(/[\uD800-\uDBFF]/)

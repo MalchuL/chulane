@@ -1,10 +1,13 @@
 /** Connect two real web hosts from the local Electron picker and verify auth partitions, workspace identity and restart. */
 import {fromMarkdown} from 'mdast-util-from-markdown'
+import {desktopLaunch} from './desktop-launch.ts'
 import {expect,type Locator,type Page,_electron as electron} from '@playwright/test'
 import {Client} from '@modelcontextprotocol/sdk/client/index.js'
 import {StdioClientTransport} from '@modelcontextprotocol/sdk/client/stdio.js'
 import {DatabaseSync} from 'node:sqlite'
 import * as Y from 'yjs'
+import {YjsDoc} from '@chulane/crdt-doc'
+import {DocumentModelImpl} from '@chulane/document-model'
 import {serverAccounts} from '../../src/server/accounts.ts'
 import {agentDocument} from '../../src/server/agent-document.ts'
 import {mkdtemp,readFile,rm} from 'node:fs/promises'
@@ -17,13 +20,29 @@ const openServer=()=>serve({file:':memory:',assets:resolve('dist'),registration:
 const openFirst=(port=0)=>serve({file:join(dir,'remote-server.sqlite'),assets:resolve('dist'),registration:true,port})
 let first=await openFirst()
 const second=await openServer()
-const launch=()=>electron.launch({args:['.','--user-data-dir='+dir]})
+const launch=()=>electron.launch(desktopLaunch(dir))
 const leaked:string[]=[]
 second.server.on('request',req=>{if(req.headers.cookie||req.headers.authorization)leaked.push(req.url||'/')})
 let firstStopped=false
 let app=await launch()
 let peer:typeof app|undefined
 try{
+  /** Hold catalog reads through a page-link choice to exercise local acknowledgement across network transitions. */
+  async function chooseLinkWithoutCatalog(page:Page,id:number,title:string){
+    const libraryProbe='**/api/library?*'
+    let releaseLibrary!:()=>void
+    const held=new Promise<void>(resolve=>{releaseLibrary=resolve})
+    await page.route(libraryProbe,async route=>{
+      await held
+      // Electron can cancel the disconnected request before the held handler resumes.
+      await route.abort().catch(error=>{if(!String(error).includes('already handled'))throw error})
+    })
+    try{
+      await page.getByRole('option',{name:title+' #'+id,exact:true}).click()
+      await expect(page.getByRole('navigation',{name:'Linked pages'}).getByRole('link',{name:title,exact:true})).toBeVisible({timeout:3000})
+    }finally{releaseLibrary();await page.unroute(libraryProbe)}
+  }
+  if(process.env.CHULANE_TEST_INSTALLED_DESKTOP)expect(await app.evaluate(({app})=>app.isPackaged)).toBe(true)
   let local=await app.firstWindow()
   await local.getByRole('button',{name:'Workspace connections'}).click()
   await expect(local.getByRole('dialog')).toContainText('No local workspaces yet')
@@ -36,6 +55,18 @@ try{
   await local.getByRole('button',{name:'Create workspace',exact:true}).click()
   await local.getByRole('button',{name:'Workspace connections'}).click()
   await expect(local.getByRole('region',{name:'Local workspaces'})).toContainText('Local notebook')
+  const connections=local.getByRole('region',{name:'Available connections'})
+  await expect(connections).toBeVisible({timeout:1500})
+  await expect(connections.getByText('Local notebook',{exact:true})).toHaveCSS('user-select','text')
+  // Exercise an overflowing catalog without adding disposable workspace records to the host.
+  const section=connections.getByRole('region',{name:'Local workspaces'})
+  await section.evaluate(node=>node.style.minBlockSize='120vh')
+  await expect(local.getByLabel('Server address')).toBeInViewport({ratio:1})
+  const addressBounds=await local.getByLabel('Server address').boundingBox()
+  await connections.evaluate(node=>{node.scrollTop=node.scrollHeight})
+  expect(await connections.evaluate(node=>node.scrollTop)).toBeGreaterThan(0)
+  expect(await local.getByLabel('Server address').boundingBox()).toEqual(addressBounds)
+  await section.evaluate(node=>node.style.removeProperty('min-block-size'))
   async function connect(origin:string){
     const ready=app.waitForEvent('window')
     await local.getByLabel('Server address').fill(origin)
@@ -61,6 +92,8 @@ try{
   const remote=await connect(first.url)
   await expect(remote.getByRole('region',{name:'Work offline'})).toHaveCount(0)
   await remote.getByRole('button',{name:'Create account'}).click()
+  const caption=remote.getByRole('banner',{name:'Window title bar'})
+  await expect(caption).toContainText(new URL(first.url).host)
   await remote.getByLabel('Username').fill('researcher')
   await remote.getByLabel('Password',{exact:true}).fill('a private test account')
   // A returning installation already has the v1 document queue, including other accounts' drafts.
@@ -79,6 +112,7 @@ try{
   await remote.getByLabel('Workspace time zone').selectOption('Pacific/Kiritimati')
   await remote.getByRole('button',{name:'Create workspace',exact:true}).click()
   await expect(remote.getByRole('heading',{name:'All pages'})).toBeVisible()
+  await expect(caption).toContainText('Field station')
   const tools=new Client({name:'member-review',version:'1'})
   try{
     await tools.connect(new StdioClientTransport({command:process.execPath,args:[resolve('src/tools/mcp.ts'),'--profile','field'],env:{
@@ -86,6 +120,7 @@ try{
     }}))
     const result=await tools.callTool({name:'propose_create',arguments:{title:'Field survey draft'}})
     expect(result.isError).toBeFalsy()
+    await remote.getByRole('button',{name:/Review \d+ pending requests?/}).click()
     const review=remote.getByRole('alert').filter({hasText:'Field survey draft'})
     await expect(review).toContainText('profile field · researcher')
     await review.getByRole('button',{name:'dismiss'}).click()
@@ -109,11 +144,23 @@ try{
     }
   }))).toEqual([2,3,[0,0]])
   expect(await remote.evaluate(()=>Boolean(window.chulaneServers||window.chulaneAppearance))).toBe(false)
+  // The remote preload has no profile APIs. Only genuine activations of web links reach the OS.
+  await app.evaluate(({shell})=>{shell.openExternal=async url=>{process.env.CHULANE_REMOTE_LINK=url}})
+  await remote.evaluate(()=>{
+    const area=document.createElement('div')
+    area.dataset.part='agent-markdown'
+    const link=document.createElement('a')
+    link.href='https://example.org/remote-notes';link.target='_blank';link.textContent='Remote research notes'
+    area.append(link);document.body.prepend(area);link.click()
+  })
+  expect(await app.evaluate(()=>process.env.CHULANE_REMOTE_LINK)).toBeUndefined()
+  await remote.getByRole('link',{name:'Remote research notes'}).press('Enter')
+  await expect.poll(()=>app.evaluate(()=>process.env.CHULANE_REMOTE_LINK)).toBe('https://example.org/remote-notes')
   await remote.getByRole('button',{name:'Appearance',exact:true}).click()
   await remote.getByLabel('Application font size',{exact:true}).fill('17')
   await remote.getByRole('button',{name:'Save theme'}).click()
-  await expect(remote.locator('html')).toHaveCSS('font-size','17px')
-  await expect(local.locator('html')).toHaveCSS('font-size','16px')
+  await expect(remote.locator('body')).toHaveCSS('font-size','17px')
+  await expect(local.locator('body')).toHaveCSS('font-size','16px')
   await remote.getByRole('button',{name:'New page',exact:true}).click()
   await remote.getByLabel('Name',{exact:true}).fill('Expedition log')
   await remote.getByRole('button',{name:'Save',exact:true}).click()
@@ -121,6 +168,48 @@ try{
   await remote.locator('[data-block-content]').first().fill('A report from the station')
   await remote.getByRole('button',{name:'Save now'}).click()
   await expect(remote.locator('.save')).toHaveText('Saved')
+  // Incoming edits travel as deltas. The offline copy must still open by itself, even if its base was evicted.
+  await remote.goto(first.url+'/?workspace=1&page=1')
+  await expect(remote.locator('[data-block-content]').first()).toHaveText('A report from the station')
+  for(const evict of [false,true]){
+    const path='/api/pages/1/state?workspace=1'
+    const original=await remote.evaluate(async path=>{
+      const head=await fetch(path)
+      return {rev:head.headers.get('X-Revision')!,state:Array.from(new Uint8Array(await head.arrayBuffer()))}
+    },path)
+    const page={id:1,title:'',plain:'',state:Uint8Array.from(original.state)}
+    const [block]=agentDocument(page).blocks
+    const after=evict?'A report from the station':'A report from the station · revised'
+    const changed=agentDocument(page,{page:1,block:block.id,before:block.text,after})
+    if(!evict){
+      const doc=new Y.Doc(),model=new DocumentModelImpl(new YjsDoc('expedition',doc))
+      try{
+        Y.applyUpdate(doc,changed.state!)
+        model.blocks.insertBlock({id:'inspection',type:'todo-item',content:'Check equipment',props:{description:'Inspect the calibration seal'}})
+        changed.state=Y.encodeStateAsUpdate(doc)
+      }finally{await model.destroy()}
+    }
+    if(evict)await remote.evaluate(async path=>{
+      const cache=await caches.open('chulane-profile-'+localStorage.getItem('chulane-active-replica'))
+      await cache.delete(path)
+    },path)
+    const received=remote.waitForResponse(response=>response.url().includes(path) && !!response.headers()['x-yjs-delta-from'])
+    const rev=await remote.evaluate(async({path,state,rev})=>{
+      const ack=await fetch(path,{method:'PUT',headers:{'Content-Type':'application/octet-stream','If-Match':rev},body:Uint8Array.from(state)})
+      if(!ack.ok)throw Error(await ack.text())
+      return (await ack.json()).rev
+    },{path,state:Array.from(changed.state!),rev:original.rev})
+    await received
+    await expect(remote.locator('[data-block-content]').first()).toHaveText(after)
+    const cached=await remote.evaluate(async path=>{
+      const cache=await caches.open('chulane-profile-'+localStorage.getItem('chulane-active-replica'))
+      const copy=(await cache.match(path))!
+      return {rev:copy.headers.get('X-Revision'),delta:copy.headers.has('X-Yjs-Delta-From'),state:Array.from(new Uint8Array(await copy.arrayBuffer()))}
+    },path)
+    expect(cached.rev).toBe(String(rev))
+    expect(cached.delta).toBe(false)
+    expect(agentDocument({...page,state:Uint8Array.from(cached.state)}).plain).toBe(after+'\nCheck equipment')
+  }
   await remote.locator('input[type=file]').first().setInputFiles({name:'field.bin',mimeType:'application/octet-stream',buffer:binaryBytes})
   await expect(remote.getByRole('link',{name:'field.bin'})).toHaveAttribute('title','Available offline')
   // Deliver a pre-Trash catalog after the attachment denial to simulate responses arriving out of order.
@@ -216,8 +305,9 @@ try{
       if(!saved.ok)throw Error(await saved.text())
     }
   },supplyBlock)
-  await remote.evaluate(async()=>{
-    for(const [name,text] of [['inventory.MD','The lantern needs paraffin. East station.'],['readings.TSV','site\tobservation\nEast\tBrackish water'],['shipping.txt','The parcel contains vermilion.']]){
+  const readings=Buffer.from('\ufeffsite\tobservation\nEast\tBrackish water','utf16le').swap16()
+  await remote.evaluate(async readings=>{
+    for(const [name,text] of [['inventory.MD','The lantern needs paraffin. East station. See Expedition log and readings.TSV.'],['readings.TSV',new Uint8Array(readings)],['shipping.txt','The parcel contains vermilion.']] as const){
       const file=await fetch('/api/pages/2/files?workspace=1&name='+name,{method:'POST',body:text})
       if(!file.ok)throw Error(await file.text())
     }
@@ -226,7 +316,7 @@ try{
     const target=await result.json()
     const link=await fetch('/api/pages/1/links/'+target.id+'?workspace=1',{method:'PUT'})
     if(!link.ok)throw Error(await link.text())
-  })
+  },Array.from(readings))
   const folder=await remote.evaluate(async()=>{
     const response=await fetch('/api/projects?workspace=1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'Field records'})})
     if(!response.ok)throw Error(await response.text())
@@ -237,6 +327,10 @@ try{
   await local.keyboard.press('Escape')
   await local.getByRole('button',{name:'Workspace connections'}).click()
   await expect(local.getByRole('button',{name:'Field station'})).toBeVisible()
+  const station=local.getByRole('button',{name:'Field station'})
+  await station.focus()
+  await local.evaluate(()=>window.dispatchEvent(new Event('focus')))
+  await expect(station).toBeFocused()
   const next=app.waitForEvent('window')
   await local.getByRole('button',{name:'Field station'}).click()
   const workspace=await next
@@ -250,7 +344,7 @@ try{
   const [cachedDay,onlineDay]=await workspace.evaluate(async()=>{
     const ids:number[]=[]
     for(const day of ['2031-01-02','2031-01-01']){
-      const response=await fetch('/api/pages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:day,day})})
+      const response=await fetch('/api/pages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:day==='2031-01-01'?'Winter fieldwork':day,day})})
       if(!response.ok)throw Error(await response.text())
       ids.push((await response.json()).id)
     }
@@ -258,8 +352,8 @@ try{
   })
   await workspace.getByRole('button',{name:'All pages',exact:true}).last().click()
   await workspace.getByRole('main').getByRole('button',{name:/^Supply list/}).click()
-  await checkDownload(workspace,'inventory.MD',Buffer.from('The lantern needs paraffin. East station.'))
-  await checkDownload(workspace,'readings.TSV',Buffer.from('site\tobservation\nEast\tBrackish water'))
+  await checkDownload(workspace,'inventory.MD',Buffer.from('The lantern needs paraffin. East station. See Expedition log and readings.TSV.'))
+  await checkDownload(workspace,'readings.TSV',readings)
   await expect(workspace.getByRole('link',{name:'shipping.txt'})).toHaveAttribute('title','Online only')
   await workspace.getByRole('button',{name:'All pages',exact:true}).last().click()
   await workspace.getByRole('main').getByRole('button',{name:'2031-01-02',exact:true}).click()
@@ -274,15 +368,93 @@ try{
   await local.getByRole('button',{name:'Forget '+second.url}).click()
   await expect(local.getByRole('region',{name:second.url})).toHaveCount(0)
   await workspace.evaluate(async()=>{await navigator.serviceWorker.ready})
+  // Open the composer for the first time offline while a shared conversation already exists.
+  const sharedChat=await workspace.evaluate(async()=>{
+    const response=await fetch('/api/agent/chats?workspace=1',{method:'POST'})
+    if(!response.ok)throw Error(await response.text())
+    return Number((await response.json()).id)
+  })
+  await workspace.route('**/api/**',route=>route.abort('internetdisconnected'))
+  await expect(workspace.getByText('Offline · Previously opened documents are available on this device.')).toBeVisible()
+  await workspace.getByRole('button',{name:'Agent',exact:true}).click()
+  const side=workspace.getByRole('complementary',{name:'Workspace agent'})
+  const composer=side.getByLabel('Message the agent')
+  await composer.fill('Review the supply list when connected')
+  await expect(side.getByText('Reconnect to send a message.')).toBeVisible()
+  await expect(side.getByRole('button',{name:'Send',exact:true})).toBeDisabled()
+  await side.getByRole('button',{name:'Add page',exact:true}).click()
+  await workspace.getByRole('option',{name:'Supply list',exact:true}).click()
+  const settingsPath='**/api/agent?workspace=1'
+  // Advertise a configured provider, then reject the turn locally so no live credentials are required.
+  await workspace.route(settingsPath,async route=>{
+    const settings=await route.fetch()
+    await route.fulfill({response:settings,json:{...await settings.json(),configured:true}})
+  })
+  await workspace.unroute('**/api/**')
+  const conversations=side.getByRole('combobox',{name:'Conversation',exact:true})
+  await expect(conversations.locator('option[value="'+sharedChat+'"]')).toHaveCount(1,{timeout:10000})
+  await expect(conversations).toHaveValue('0')
+  await expect(composer).toHaveValue('Review the supply list when connected')
+  await expect(side.getByRole('button',{name:'Remove Supply list',exact:true})).toBeVisible()
+  await conversations.selectOption(String(sharedChat))
+  await expect(composer).toHaveValue('')
+  await conversations.selectOption('0')
+  await expect(composer).toHaveValue('Review the supply list when connected')
+  // The server can commit the new chat even when its acknowledgement never reaches the composer.
+  let committedChat=0
+  await workspace.route('**/api/agent/chats?workspace=1',async route=>{
+    const created=await route.fetch()
+    expect(created.ok()).toBe(true)
+    committedChat=(await created.json()).id
+    await route.fulfill({status:502,json:{error:'Chat acknowledgement lost'}})
+  },{times:1})
+  await side.getByRole('button',{name:'Send',exact:true}).click()
+  await expect(side.getByRole('alert')).toHaveText('Chat acknowledgement lost')
+  await expect(conversations).toHaveValue('0')
+  const turnPath='**/api/agent/chats/*/turn?workspace=1'
+  await workspace.route(turnPath,route=>route.fulfill({status:503,json:{error:'Provider unavailable for this turn'}}))
+  const sent=workspace.waitForRequest(req=>new URL(req.url()).pathname.endsWith('/turn'))
+  await side.getByRole('button',{name:'Send',exact:true}).click()
+  const submitted=await sent
+  expect(submitted.postDataJSON()).toMatchObject({text:'Review the supply list when connected',references:[2]})
+  const newChat=Number(new URL(submitted.url()).pathname.split('/').at(-2))
+  expect(committedChat).toBeGreaterThan(sharedChat)
+  expect(newChat).toBe(committedChat)
+  await expect(conversations).toHaveValue(String(newChat))
+  await expect(side.getByRole('alert')).toContainText('Provider unavailable for this turn')
+  await expect(composer).toHaveValue('Review the supply list when connected')
+  await expect(side.getByRole('button',{name:'Remove Supply list',exact:true})).toBeVisible()
+  await workspace.unroute(turnPath)
+  await workspace.unroute(settingsPath)
+  await side.getByRole('button',{name:'Close agent'}).click()
   const origin=first.url
   // A second installation has its own Electron session, cached catalog, and IndexedDB writers.
-  peer=await electron.launch({args:['.','--user-data-dir='+join(dir,'peer-device')]})
+  peer=await electron.launch(desktopLaunch(join(dir,'peer-device')))
   const peerLocal=await peer.firstWindow()
   await peerLocal.getByRole('button',{name:'Workspace connections'}).click()
   await peerLocal.getByLabel('Server address').fill(origin)
   const peerOpening=peer.waitForEvent('window')
   await peerLocal.getByRole('button',{name:'Connect to server'}).click()
-  const peerWorkspace=await peerOpening
+  let peerWorkspace=await peerOpening
+  await peerWorkspace.getByRole('button',{name:'Create account'}).click()
+  await peerWorkspace.getByLabel('Username').fill('field_observer')
+  await peerWorkspace.getByLabel('Password',{exact:true}).fill('a private observer account')
+  await peerWorkspace.getByRole('button',{name:'Register',exact:true}).click()
+  await expect(peerWorkspace.getByLabel('Workspace name')).toBeVisible()
+  await peerWorkspace.close()
+  expect(await workspace.evaluate(async()=>(await fetch('/api/workspaces/invitations?workspace=1',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({username:'field_observer',role:'viewer'})})).status)).toBe(200)
+  await peerLocal.keyboard.press('Escape')
+  await peerLocal.getByRole('button',{name:'Workspace connections'}).click()
+  const offer=peerLocal.getByRole('button',{name:'Review 1 invitation'})
+  await expect(offer).toBeVisible()
+  const reviewing=peer.waitForEvent('window')
+  await offer.press('Enter')
+  peerWorkspace=await reviewing
+  await peerWorkspace.getByRole('button',{name:'Accept invitation to Field station'}).click()
+  await expect(peerWorkspace.getByLabel('Workspace',{exact:true}).locator('option:checked')).toHaveText('Field station')
+  await expect(peerWorkspace.getByRole('button',{name:'New page',exact:true})).toHaveCount(0)
+  await peerWorkspace.getByRole('button',{name:'Sign out'}).click()
   async function signInPeer(){
     await peerWorkspace.getByLabel('Username').fill('researcher')
     await peerWorkspace.getByLabel('Password',{exact:true}).fill('a private test account')
@@ -290,7 +462,22 @@ try{
   }
   await signInPeer()
   await expect(peerWorkspace.getByRole('heading',{name:'All pages'})).toBeVisible()
+  await workspace.getByRole('button',{name:'Page actions'}).click()
+  await workspace.getByRole('button',{name:'Link to page',exact:true}).click()
+  await chooseLinkWithoutCatalog(workspace,2,'Supply list')
+  await workspace.keyboard.press('Escape')
+  await workspace.getByRole('button',{name:'Unlink Supply list'}).click()
+  await expect(workspace.getByRole('button',{name:'Unlink Supply list'})).toHaveCount(0)
+  await workspace.getByRole('button',{name:'Page actions'}).click()
+  await workspace.getByRole('button',{name:'Link to page',exact:true}).click()
+  const linkSearch=workspace.getByRole('combobox',{name:'Search pages to link'})
+  await linkSearch.fill('#'+cachedDay)
   await first.close();firstStopped=true
+  await expect(workspace.getByText('Offline · Previously opened documents are available on this device.')).toBeVisible({timeout:10000})
+  await expect(linkSearch).toBeFocused()
+  await expect(linkSearch).toHaveValue('#'+cachedDay)
+  await workspace.keyboard.press('Escape')
+  await workspace.keyboard.press('Escape')
   await workspace.locator('[data-block-content]').first().fill('Offline field observation')
   await expect(workspace.locator('.save')).toHaveText('Saved on device · waiting to sync')
   await workspace.getByRole('button',{name:/Supply list/}).click()
@@ -301,15 +488,33 @@ try{
   await workspace.getByLabel('Name',{exact:true}).fill('Supply list from camp')
   await workspace.getByRole('button',{name:'Save',exact:true}).click()
   await expect(workspace.getByRole('heading',{name:'Supply list from camp'})).toBeVisible()
+  await workspace.getByRole('button',{name:'Page tags'}).click()
+  const supplies=workspace.getByRole('checkbox',{name:'#Supplies'})
+  await expect(supplies).toBeEnabled()
+  await supplies.focus()
+  await supplies.press('Space')
+  await expect(supplies).not.toBeChecked()
+  await workspace.keyboard.press('Escape')
   await workspace.getByRole('button',{name:'Page actions'}).click()
-  await workspace.getByLabel('Move to project').selectOption(String(folder))
-  await expect(workspace.getByLabel('Move to project')).toHaveValue(String(folder))
+  await workspace.getByRole('button',{name:'Link to page',exact:true}).click()
+  await expect(workspace.getByRole('option',{name:/Remote-only page · Online only #/})).toBeVisible()
+  await workspace.getByRole('combobox',{name:'Search pages to link'}).fill('#'+cachedDay)
+  await chooseLinkWithoutCatalog(workspace,cachedDay,'2031-01-02')
+  await workspace.keyboard.press('Escape')
+  await expect(workspace.getByRole('navigation',{name:'Linked pages'}).getByRole('link',{name:'2031-01-02'})).toBeVisible()
+
+  await workspace.getByRole('button',{name:'Page actions'}).click()
+  await workspace.getByRole('button',{name:'Move to project'}).click()
+  const destinations=workspace.getByRole('combobox',{name:'Search project destinations'})
+  await destinations.fill('#'+folder)
+  await destinations.press('Enter')
+  await expect(workspace.getByRole('button',{name:'Move to project'})).toHaveText('Field records · #'+folder)
   await workspace.keyboard.press('Escape')
   await workspace.getByRole('radio',{name:'Canvas',exact:true}).click()
   const visuals=workspace.getByRole('toolbar',{name:'Visual objects'})
   await visuals.getByRole('button',{name:'Text',exact:true}).click()
   await workspace.getByRole('dialog',{name:'text tools'}).getByRole('button',{name:'Text',exact:true}).click()
-  await workspace.locator('.edgeless-drawing-capture[data-active]').click()
+  await workspace.locator('.edgeless-drawing-capture[data-active]').click({position:{x:135,y:80}})
   await visuals.getByRole('button',{name:'Select',exact:true}).click()
   const label=workspace.locator('[data-edgeless-visual-kind="text"]')
   await label.dblclick()
@@ -335,6 +540,9 @@ try{
   await draftDay.locator('[data-block-content]').first().click()
   await draftDay.locator('[data-block-content]').first().pressSequentially('Created at camp')
   await expect(draftDay.locator('[data-block-content]').first()).toHaveText('Created at camp')
+  const exportDay=draftDay.getByRole('button',{name:'Export 2031-01-03 as Markdown'})
+  await expect(exportDay).toBeVisible({timeout:1500})
+  expect((await savedDownload(exportDay,'2031-01-03.md')).toString('utf8')).toBe('Created at camp')
   await expect(draftDay.locator('.save')).toHaveText('Saved on device · waiting to sync')
   await peerWorkspace.clock.setFixedTime(new Date('2031-01-04T01:00:00Z'))
   const nextDay=peerWorkspace.getByRole('article',{name:'2031-01-04',exact:true})
@@ -348,46 +556,104 @@ try{
   await local.getByRole('button',{name:'Open '+origin}).click()
   const offline=await opening
   await expect(offline.getByRole('button',{name:'Camp records',exact:true})).toBeVisible()
+  // A body can be saved just before disconnect, while the device still has the previous list.
+  await offline.evaluate(async binaryName=>{
+    const cache=await caches.open('chulane-profile-'+localStorage.getItem('chulane-active-replica'))
+    for(const [page,name] of [[1,binaryName],[2,'inventory.MD']] as const){
+      const path='/api/pages/'+page+'/files'
+      const list=path+'?workspace=1'
+      const rows:{id:number;name:string}[]=await (await cache.match(list))!.json()
+      const item=rows.find(file=>file.name===name)
+      if(!item||!await cache.match(path+'/'+item.id+'?workspace=1'))throw Error('Attachment fixture missing: '+name)
+      await cache.put(list,Response.json(rows.filter(file=>file.id!==item.id)))
+    }
+  },binaryName)
   await offline.getByRole('button',{name:'Export unsynced edits'}).click()
+  const savedEditsPanel=offline.getByRole('dialog',{name:'Unsynced edits on this device'})
+  await expect(savedEditsPanel.getByRole('region',{name:'Saved edits'})).toBeVisible({timeout:1500})
+  await expect(offline.getByRole('navigation',{name:'Library',exact:true})).toBeVisible()
   const projectCopy=JSON.parse((await savedDownload(offline.getByRole('button',{name:'Field station · Project · Camp records'}),'chulane-workspace-1-project-'+folder+'.json')).toString())
   expect(projectCopy).toMatchObject({format:'chulane-project-recovery',project:folder,renames:[{baseName:'Field records',name:'Camp records'}]})
   const pageCopy=JSON.parse((await savedDownload(offline.getByRole('button',{name:'Field station · Supply list from camp'}),'chulane-workspace-1-page-2.json')).toString())
+  expect(pageCopy.tags).toMatchObject([{tag:expect.any(Number),name:'Supplies',active:false,operationId:expect.stringMatching(/^[0-9a-f]{32}$/)}])
+  expect(pageCopy.links).toEqual([{target:cachedDay,linked:true,operationId:expect.stringMatching(/^[0-9a-f]{32}$/)}])
   expect(pageCopy.moves).toEqual([{baseProject:null,project:folder,operationId:expect.stringMatching(/^[0-9a-f]{32}$/)}])
   await offline.keyboard.press('Escape')
   await expect(offline.getByRole('dialog',{name:'Unsynced edits on this device'})).toHaveCount(0)
-  await expect(offline.locator('html')).toHaveCSS('font-size','17px')
+  await expect(offline.locator('body')).toHaveCSS('font-size','17px')
   await expect(offline.getByRole('button',{name:/Supply list from camp/})).toBeVisible()
   await offline.getByRole('navigation',{name:'Library',exact:true}).getByRole('button',{name:'Tags',exact:true}).click()
   await offline.getByRole('button',{name:'#Supplies',exact:true}).click()
+  await expect(offline.getByRole('link',{name:/Supply list from camp.*Paper and pencils/})).toBeVisible()
+  await expect(offline.getByRole('link',{name:'Supply list from camp',exact:true})).toHaveCount(0)
+  await offline.getByRole('link',{name:/Supply list from camp.*Paper and pencils/}).click()
+  await offline.getByRole('button',{name:'Page tags'}).click()
+  const restoredTag=offline.getByRole('checkbox',{name:'#Supplies'})
+  await expect(restoredTag).not.toBeChecked()
+  await restoredTag.check()
+  await offline.keyboard.press('Escape')
+  await offline.getByRole('region',{name:'Document properties'}).getByRole('button',{name:'#Supplies',exact:true}).click()
   await expect(offline.getByRole('link',{name:'Supply list from camp',exact:true})).toBeVisible()
   await offline.getByRole('button',{name:'Show field table'}).click()
   const fields=offline.getByRole('table',{name:'#Supplies fields'})
   await expect(fields.getByRole('cell',{name:'0',exact:true})).toBeVisible()
   await expect(fields.getByRole('cell',{name:'12',exact:true})).toBeVisible()
   await expect(offline.getByRole('button',{name:'Manage fields'})).toHaveCount(0)
+  await fields.getByLabel('Filter Count').fill('0')
+  await expect(fields.getByRole('link')).toHaveCount(1)
+  await expect(fields.getByRole('cell',{name:'0',exact:true})).toBeVisible()
+  await fields.getByLabel('Filter Count').fill('2')
+  await expect(fields.getByRole('link')).toHaveCount(0)
+  await offline.getByRole('button',{name:'Clear filters'}).click()
+  await expect(fields.getByRole('link')).toHaveCount(2)
   await fields.getByLabel('Filter Count').fill('12')
   await expect(fields.getByRole('link')).toHaveCount(1)
-  await fields.getByRole('link',{name:/Supply list from camp.*Paper and pencils/}).click()
+  await fields.getByRole('link',{name:/Supply list from camp.*Paper and pencils/}).press('Enter')
   await expect(offline.locator('[data-block-id="'+supplyBlock+'"] [data-block-content]').first()).toBeInViewport()
   await offline.getByRole('button',{name:'Page actions'}).click()
-  await expect(offline.getByLabel('Move to project')).toHaveValue(String(folder))
+  await expect(offline.getByRole('button',{name:'Move to project'})).toHaveText('Camp records · #'+folder)
+  await expect(offline.getByRole('button',{name:'Link to page',exact:true})).toBeEnabled()
+  await expect(offline.getByRole('button',{name:'Move to trash',exact:true})).toBeDisabled()
+  await expect(offline.getByRole('button',{name:'Move to project'})).toBeEnabled()
   const exported=(await savedDownload(offline.getByRole('button',{name:'Markdown',exact:true}),'Supply list from camp.md')).toString('utf8')
   expect(exported).toContain('Paper and pencils')
   expect(exported).toContain('Spare compass')
-  expect(fromMarkdown(exported).children.at(-1)).toMatchObject({type:'list',children:[{children:[{children:[{type:'link',url:origin+'/?workspace=1&page=1'}]}]}]})
+  for(const name of ['inventory.MD','readings.TSV','shipping.txt']){
+    expect(exported).toContain('['+name+']('+origin+'/api/pages/2/files/')
+  }
+  expect(fromMarkdown(exported).children.at(-1)).toMatchObject({type:'list',children:[1,cachedDay].map(id=>({children:[{children:[{type:'link',url:origin+'/?workspace=1&page='+id}]}]}))})
   expect(exported).not.toContain('Original stationery')
-  await expect(offline.getByText(/Markdown exported.*attachments.*tag assignments.*tag field values/)).toBeVisible()
+  await expect(offline.getByRole('region',{name:/Notifications/}).getByText(/Markdown exported.*attachments.*tag assignments.*tag field values/)).toBeVisible()
   await offline.keyboard.press('Escape')
-  await offline.getByRole('button',{name:'Page and block tags'}).click()
-  const tagPicker=offline.getByRole('dialog',{name:'Page and block tags'})
-  await tagPicker.getByLabel('Tag target').selectOption(supplyBlock)
+  await offline.getByRole('button',{name:'Page tags'}).click()
+  const tagPicker=offline.getByRole('dialog',{name:'Page tags'})
+  await expect(tagPicker.getByRole('combobox')).toHaveCount(0)
   await expect(tagPicker.getByRole('checkbox',{name:'#Supplies'})).toBeChecked()
-  await expect(tagPicker.getByRole('checkbox',{name:'#Supplies'})).toBeDisabled()
+  await tagPicker.getByRole('checkbox',{name:'#Supplies'}).uncheck()
   await offline.keyboard.press('Escape')
   await offline.getByRole('button',{name:'All pages',exact:true}).first().click()
   const offlineSearch=offline.getByRole('textbox',{name:'Search pages'})
+  await offlineSearch.fill('#Supplies')
+  await expect(offline.getByRole('status',{name:'Library search'})).toHaveText('1 page')
+  await expect(offline.getByRole('list',{name:'Page list',exact:true}).getByRole('strong')).toHaveText('Supply list from camp')
+  await offlineSearch.fill('  EXPEDITION LOG  ')
+  await expect(offline.getByRole('status',{name:'Library search'})).toHaveText('2 pages')
+  const searchRows=offline.getByRole('list',{name:'Page list',exact:true}).getByRole('listitem')
+  await expect(searchRows.first().getByRole('strong')).toHaveText('Expedition log')
+  await offlineSearch.fill('#2')
+  await expect(offline.getByRole('status',{name:'Library search'})).toHaveText('1 page')
+  await expect(searchRows.first().getByRole('strong')).toHaveText('Supply list from camp')
+  await offlineSearch.fill('2031-01-01')
+  await expect(offline.getByRole('status',{name:'Library search'})).toHaveText('1 page')
+  await expect(searchRows.getByRole('button',{name:'Winter fieldwork'})).toBeDisabled()
+  await expect(searchRows).toContainText('2031-01-01')
+  await offlineSearch.fill('calibration seal')
+  await offline.getByRole('main').getByRole('button',{name:'Expedition log Inspect the calibration seal'}).click()
+  await expect(offline.locator('[data-block-id="inspection"]').first()).toBeInViewport()
+  await offline.getByRole('button',{name:'All pages',exact:true}).first().click()
   await offlineSearch.fill('pencils')
-  await offline.getByRole('main').getByRole('button',{name:/Supply list from camp.*Paper and pencils/}).click()
+  await offline.getByRole('main').getByRole('button',{name:/Supply list from camp.*Paper and pencils/}).press('Enter')
+  await expect(offline.locator('[data-source-page="2"] [data-block-content]').first()).toBeFocused()
   await expect(offline.locator('[data-source-page="2"] [data-block-content]').first()).toHaveText('Paper and pencils')
   await expect(offline.locator('[data-source-page="2"] [data-block-content]').first()).toBeInViewport()
   await offline.getByRole('button',{name:'All pages',exact:true}).first().click()
@@ -396,17 +662,41 @@ try{
   await expect(offline.getByRole('radio',{name:'Canvas',exact:true})).toHaveAttribute('aria-checked','true')
   await expect(offline.locator('[data-edgeless-visual-kind="text"]')).toContainText('Spare compass')
   await offline.getByRole('button',{name:'All pages',exact:true}).first().click()
+  await offlineSearch.fill('ОБРАЗЕЦ')
+  await offline.getByRole('button',{name:'Matching attachments for Expedition log'}).click()
+  const binaryMatch=offline.getByRole('dialog',{name:'Matching attachments for Expedition log'}).getByRole('link',{name:binaryName,exact:true})
+  expect(await savedDownload(binaryMatch,binaryName)).toEqual(binaryBytes)
+  await offline.keyboard.press('Escape')
   await offlineSearch.fill('PARAFFIN')
   await expect(offline.getByRole('main').getByRole('button',{name:/Supply list from camp.*inventory.MD.*lantern needs paraffin/})).toBeVisible()
   await offlineSearch.fill('brackish')
   await expect(offline.getByRole('main').getByRole('button',{name:/Supply list from camp.*readings.TSV.*Brackish water/})).toBeVisible()
+  await offlineSearch.fill('READINGS.TSV')
+  await offline.getByRole('button',{name:'Matching attachments for Supply list from camp'}).click()
+  const exactFiles=offline.getByRole('region',{name:'Attachment results'}).getByRole('link')
+  await expect(exactFiles).toHaveCount(2)
+  await expect(exactFiles.first()).toHaveAttribute('download','readings.TSV')
+  await offline.keyboard.press('Escape')
   await offlineSearch.fill('East')
   await offline.getByRole('button',{name:'Matching attachments for Supply list from camp'}).click()
   const matchingFiles=offline.getByRole('dialog',{name:'Matching attachments for Supply list from camp'})
   await expect(matchingFiles.getByRole('link')).toHaveCount(2)
-  const reading=matchingFiles.getByRole('link',{name:/readings.TSV/})
-  expect(await savedDownload(reading,'readings.TSV')).toEqual(Buffer.from('site\tobservation\nEast\tBrackish water'))
+  const reading=matchingFiles.getByRole('link',{name:/^readings\.TSV/})
+  expect(await savedDownload(reading,'readings.TSV')).toEqual(readings)
   await offline.keyboard.press('Escape')
+  // A single result can contain both downloaded files and a known online-only name.
+  await offlineSearch.fill('.')
+  await offline.getByRole('button',{name:'Matching attachments for Supply list from camp'}).click()
+  await expect(matchingFiles.getByRole('link')).toHaveCount(2)
+  await expect(matchingFiles.getByRole('button',{name:'shipping.txt · Online only'})).toBeDisabled()
+  await offline.keyboard.press('Escape')
+  await offlineSearch.fill('SHIPPING.TXT')
+  await offline.getByRole('button',{name:'Matching attachments for Supply list from camp'}).click({timeout:5000})
+  await expect(matchingFiles.getByRole('button',{name:'shipping.txt · Online only'})).toBeDisabled()
+  await expect(matchingFiles.getByRole('link')).toHaveCount(0)
+  await offline.keyboard.press('Escape')
+  await offlineSearch.fill('camp records')
+  await expect(offline.getByRole('list',{name:'Matching projects'}).getByRole('link',{name:'Camp records',exact:true})).toBeVisible()
   await offlineSearch.fill('vermilion')
   await expect(offline.getByRole('heading',{name:'No matching pages'})).toBeVisible()
   await offlineSearch.fill('Original stationery')
@@ -414,34 +704,84 @@ try{
   await offline.getByRole('button',{name:'Clear search'}).click()
   await expect(offline.getByRole('button',{name:'Remote-only page'})).toBeDisabled()
   await expect(offline.getByRole('button',{name:/Expedition log/})).toHaveAttribute('title','Available offline')
+  // A date created before the restart has only a device ID until the first successful sync.
+  for(const scope of ['All pages','Journal']){
+    await expect(offline.getByRole('heading',{name:scope,exact:true})).toBeVisible()
+    await offlineSearch.fill('Created at camp')
+    const dayResult=offline.getByRole('main').getByRole('button',{name:/2031-01-03.*Created at camp/})
+    await expect(dayResult).toBeVisible({timeout:3000})
+    await dayResult.press('Enter')
+    const entry=offline.getByRole('article',{name:'2031-01-03',exact:true})
+    await expect(entry.getByRole('heading')).toBeFocused()
+    await expect(entry.locator('[data-block-content]').first()).toHaveText('Created at camp')
+    expect(new URL(offline.url()).searchParams.has('page')).toBe(false)
+  }
   await offline.clock.setFixedTime(new Date('2031-01-01T09:00:00Z'))
-  await offline.getByRole('button',{name:'Journal',exact:true}).click()
+  await offline.getByRole('navigation',{name:'Library',exact:true}).getByRole('button',{name:'Journal',exact:true}).click()
   await expect(offline.getByRole('article',{name:'2031-01-03',exact:true})).toContainText('Created at camp')
   await expect(offline.locator('[data-source-page="'+onlineDay+'"]')).toContainText('Online only')
   await offline.getByRole('button',{name:'Open today',exact:true}).click()
-  await expect(offline.getByText('Today’s journal entry is unavailable on this device. Connect to open it.')).toBeVisible()
+  await expect(offline.getByRole('region',{name:/Notifications/}).getByText('Today’s journal entry is unavailable on this device. Connect to open it.')).toBeVisible()
   await offline.clock.setFixedTime(new Date('2031-01-01T11:00:00Z'))
   await offline.getByRole('button',{name:'Open today',exact:true}).click()
   await expect(offline.locator('article.doc')).toHaveAttribute('data-source-page',String(cachedDay))
-  await offline.locator('[data-block-content]').first().fill('Journal offline after midnight')
+  const offlineWriting=offline.locator('[data-block-content]').first()
+  await offlineWriting.fill('#Supplies')
+  await expect(offline.getByRole('listbox',{name:'Workspace tags'}).getByRole('option',{name:'#Supplies',exact:true})).toBeVisible()
+  await offlineWriting.press('Space')
+  await expect(offline.getByRole('listbox',{name:'Workspace tags'})).toHaveCount(0)
+  expect(await offlineWriting.textContent()).toMatch(/^#Supplies[ \u00a0]$/)
+  await offlineWriting.fill('Journal offline after midnight')
   await expect(offline.locator('.save')).toHaveText('Saved on device · waiting to sync')
+  await offline.getByRole('button',{name:'Show 2031-01-02 in journal'}).press('Enter')
+  const savedJournalEntry=offline.getByRole('article',{name:'2031-01-02',exact:true})
+  await expect(savedJournalEntry.getByRole('heading')).toBeFocused()
+  await expect(savedJournalEntry.locator('[data-block-content]').first()).toHaveText('Journal offline after midnight')
   await offline.clock.setFixedTime(new Date())
   await offline.getByRole('button',{name:'All pages',exact:true}).first().click()
-  await offline.getByRole('button',{name:/Expedition log/}).click()
+  await offline.getByRole('button',{name:/Supply list from camp/}).first().click()
+  await expect(offline.getByRole('button',{name:'Unlink Expedition log',exact:true})).toBeEnabled()
+  const dayLink=offline.getByRole('navigation',{name:'Linked pages'}).getByRole('link',{name:'2031-01-02'})
+  await dayLink.click()
+  const backlink=offline.getByRole('navigation',{name:'Referenced by'}).getByRole('link',{name:'Supply list from camp'})
+  await backlink.click()
+  const cachedLink=offline.getByRole('navigation',{name:'Linked pages'}).getByRole('link',{name:'Expedition log',exact:true})
+  await expect(cachedLink).toHaveAttribute('title','Available offline')
+  await cachedLink.press('Enter')
   await expect(offline.locator('.page-surface')).toContainText('Offline field observation')
-  await offline.getByRole('link',{name:'Remote-only page',exact:true}).click()
-  await expect(offline.getByRole('alert')).toContainText('This page is only available online')
+  await backlink.click()
+  await offline.getByRole('button',{name:'Unlink Expedition log',exact:true}).click()
+  await expect(cachedLink).toHaveCount(0)
+  await offline.getByRole('button',{name:/Expedition log/}).first().click()
+  await expect(backlink).toHaveCount(0)
+  const unavailablePage=offline.getByRole('navigation',{name:'Linked pages'}).getByRole('link',{name:'Remote-only page · Online only',exact:true})
+  await expect(unavailablePage).toBeDisabled({timeout:1500})
+  await expect(unavailablePage).not.toHaveAttribute('href',/.*/)
+  await expect(offline.getByRole('alert').filter({hasText:'This page is only available online'})).toHaveCount(0)
   await expect(offline.locator('.page-surface')).toContainText('Offline field observation')
   await expect(offline.getByRole('button',{name:/online-only.bin.*Online only/})).toBeDisabled()
   await expect(offline.getByRole('button',{name:/capacity.bin.*Online only/})).toBeDisabled()
   await checkDownload(offline,binaryName,binaryBytes)
   await checkDownload(offline,'field.bin',binaryBytes)
+  // A separately evicted list must not hide remaining binaries or borrow names from another page.
+  await offline.getByRole('button',{name:'All pages',exact:true}).first().click()
+  expect(await offline.evaluate(async()=>{
+    const cache=await caches.open('chulane-profile-'+localStorage.getItem('chulane-active-replica'))
+    return cache.delete('/api/pages/1/files?workspace=1')
+  })).toBe(true)
+  await offline.getByRole('button',{name:/Expedition log/}).click()
+  await checkDownload(offline,binaryName,binaryBytes)
+  await expect(offline.getByRole('link',{name:'inventory.MD',exact:true})).toHaveCount(0)
   await offline.locator('[data-block-content]').first().fill('Recovered after offline restart')
   await expect(offline.locator('.save')).toHaveText('Saved on device · waiting to sync')
   first=await openFirst(Number(new URL(origin).port));firstStopped=false
   const login=await fetch(origin+'/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:'researcher',password:'a private test account'})})
   const headers={Cookie:login.headers.get('set-cookie')!.split(';')[0],'Content-Type':'application/json'}
   const call=(path:string,data?:object)=>fetch(origin+'/api/'+path,{method:data?'POST':'GET',headers,body:JSON.stringify(data)})
+  const reimport=await call('pages/import-markdown',{title:'Recovered Markdown links',content:exported})
+  expect(reimport.status).toBe(200)
+  const importedPage=(await reimport.json()).id
+  expect((await(await call('library')).json()).links).toContainEqual({source:importedPage,target:1})
   expect((await fetch(origin+'/api/projects/'+folder,{method:'PATCH',headers,body:JSON.stringify({baseName:'Field records',name:'Station records'})})).status).toBe(200)
   const sameDay=await (await call('pages',{day:'2031-01-03',title:'2031-01-03'})).json()
   const serverEdit=await(await call('proposals',{page:sameDay.id,edit:{block:'',before:'',after:'From the station'}})).json()
@@ -454,7 +794,12 @@ try{
   const edit=await(await call('proposals',{page:1,edit:{block:'',before:'',after:'An independent server edit'}})).json()
   expect((await call('proposals/'+edit.pending+'/approve',{})).status).toBe(200)
   const copy=offline.getByRole('button',{name:'Open offline copy of Field station'})
-  await expect(copy).toBeVisible({timeout:10000});await copy.click()
+  await expect(copy).toBeVisible({timeout:10000})
+  await offline.goto(origin+'/?workspace=1&project='+folder)
+  await copy.click()
+  await expect(offline.getByRole('heading',{name:'Camp records',exact:true})).toBeVisible()
+  await expect(offline).toHaveURL(origin+'/?workspace=1&project='+folder)
+  await offline.getByRole('navigation',{name:'Library',exact:true}).getByRole('button',{name:'All pages',exact:true}).click()
   await offline.getByRole('button',{name:/Expedition log/}).first().click()
   await expect(offline.locator('.page-surface')).toContainText('Recovered after offline restart')
   await offline.locator('[data-block-content]').first().fill('Recovered after offline restart · Recorded while sign-in expired')
@@ -466,8 +811,13 @@ try{
   await offline.getByRole('button',{name:'Open library'}).click()
   await expect(offline.locator('.page-surface')).toContainText('Recorded while sign-in expired')
   await expect(offline.locator('.page-surface')).toContainText('An independent server edit')
+  await expect(offline.getByRole('navigation',{name:'Linked pages'}).getByRole('link',{name:'Remote-only page',exact:true})).toHaveAttribute('href',/^\?workspace=1&page=\d+$/)
+  await expect(offline.getByRole('button',{name:'Unlink Remote-only page',exact:true})).toBeEnabled()
   await expect(offline.locator('.save')).toHaveText('Saved')
   await expect.poll(async()=>(await(await call('library')).json()).projectNameConflicts.map(row=>row.name)).toContain('Camp records')
+  const syncedLinks=async()=>(await(await call('library')).json()).links
+  await expect.poll(syncedLinks).toContainEqual({source:2,target:cachedDay})
+  await expect.poll(syncedLinks).not.toContainEqual({source:2,target:1})
   const source=await(await call('source?id=1')).json()
   expect(source.text).toContain('Recorded while sign-in expired')
   expect(source.text).toContain('An independent server edit')
@@ -479,6 +829,7 @@ try{
   }).toBe('Supply list from camp')
   expect((await call('source?id=2')).status).toBe(404)
   expect((await setTrashed(false)).status).toBe(200)
+  await expect.poll(async()=>(await(await call('library')).json()).applications.filter(row=>row.page===2&&row.tag===pageCopy.tags[0].tag).map(row=>row.block)).toEqual([supplyBlock])
   await expect.poll(async()=>(await(await call('source?id=2')).json()).text).toBe('Paper and pencils')
   await expect.poll(async()=>(await(await call('library')).json()).titleConflicts.map(row=>row.title)).toContain('Supply list from camp')
   await expect.poll(async()=>(await(await call('source?id='+cachedDay)).json()).text).toBe('Journal offline after midnight')
@@ -495,7 +846,7 @@ try{
   await expect(offline.locator('.page-surface')).toContainText('Journal offline after midnight')
   await offline.locator('input[type=file]:not([accept])').setInputFiles({name:'day.bin',mimeType:'application/octet-stream',buffer:binaryBytes})
   await expect(offline.getByRole('link',{name:'day.bin'})).toHaveAttribute('title','Available offline')
-  await offline.route('**/api/pages/'+cachedDay+'/state?**',route=>route.request().method()==='PUT'?route.fulfill({status:503,json:{error:'Offline write'}}):route.continue())
+  await offline.route('**/api/pages/'+cachedDay+'/state?**',route=>['PUT','PATCH'].includes(route.request().method())?route.fulfill({status:503,json:{error:'Offline write'}}):route.continue())
   await offline.locator('[data-block-content]').first().fill('Last local journal correction')
   await expect(offline.locator('.save')).toHaveText('Saved on device · waiting to sync')
   await offline.route('**/api/library?**',route=>route.abort('internetdisconnected'))
@@ -513,6 +864,17 @@ try{
   await expect(offline.getByRole('heading',{name:/^Supply list/})).toBeVisible()
   const recovery=offline.getByRole('region',{name:'Deleted page copies'})
   await expect(recovery).toContainText('2031-01-02')
+  const markdownCopy=recovery.getByRole('button',{name:'Export 2031-01-02 as Markdown'})
+  await expect(markdownCopy).toBeVisible()
+  const recoveredWriting=(await savedDownload(markdownCopy,'2031-01-02.md')).toString('utf8')
+  expect(recoveredWriting).toBe('Last local journal correction')
+  await expect(offline.getByRole('region',{name:/Notifications/}).getByText(/Markdown exported.*attachments/i)).toBeVisible()
+  const newPage=await call('pages/import-markdown',{title:'Recovered journal correction',content:recoveredWriting})
+  expect(newPage.ok).toBe(true)
+  const restoredId=(await newPage.json()).id
+  expect(restoredId).not.toBe(cachedDay)
+  expect((await(await call('source?id='+restoredId)).json()).text).toBe(recoveredWriting)
+  expect((await call('source?id='+cachedDay)).status).toBe(404)
   const recoveredFile=join(dir,'deleted-day.json')
   await app.evaluate(({BrowserWindow},{origin,path})=>{
     const win=BrowserWindow.getAllWindows().find(w=>new URL(w.webContents.getURL()).origin===origin)!
@@ -550,6 +912,7 @@ try{
   expect((await fetch(cleanPath,{method:'PATCH',headers,body:JSON.stringify({deleted:true})})).status).toBe(200)
   expect((await fetch(cleanPath,{method:'DELETE',headers})).status).toBe(200)
   await expect(recovery).toContainText('2031-01-03')
+  expect((await savedDownload(recovery.getByRole('button',{name:'Export 2031-01-03 as Markdown'}),'2031-01-03.md')).toString('utf8')).toContain('From the ridge')
   await recovery.getByRole('button',{name:'Discard local copy'}).click()
   await offline.getByRole('dialog').getByRole('button',{name:'Cancel'}).click()
   const cleanFile=join(dir,'cached-only-day.json')
@@ -578,7 +941,7 @@ try{
   let rejection=503
   let closedWriteRejected=false
   await offline.route(routePattern,route=>{
-    if(route.request().method()!=='PUT')return route.continue()
+    if(!['PUT','PATCH'].includes(route.request().method()))return route.continue()
     if(rejection===422)closedWriteRejected=true
     return route.fulfill({status:rejection,json:{error:'Document upload unavailable'}})
   })
@@ -591,6 +954,11 @@ try{
   await expect(offline.locator('.save')).toHaveText('Saved on device · waiting to sync')
   await offline.getByRole('button',{name:/^Expedition log/}).click()
   await expect(offline.locator('[data-source-page="1"]')).toBeVisible()
+  // Switching documents keeps the failed writer in its tab. Close that tab to exercise outbox replay.
+  const supplyTab=offline.getByRole('tab',{name:/Supply list from camp/})
+  await supplyTab.hover()
+  await supplyTab.getByRole('button',{name:'Close tab'}).click()
+  await expect(supplyTab).toHaveCount(0)
   rejection=422
   await expect.poll(()=>closedWriteRejected,{timeout:15000}).toBe(true)
   await expect(syncStatus).toHaveText('Sync error',{timeout:15000})
@@ -606,7 +974,7 @@ try{
   expect(hidden.deleted).toBe(1)
   expect(hidden.plain).toContain('Delivered by manual retry')
   await offline.getByRole('navigation',{name:'Library',exact:true}).getByRole('button',{name:'Trash',exact:true}).click()
-  await offline.getByRole('listitem').filter({hasText:'Supply list from camp'}).getByRole('button',{name:'Restore',exact:true}).click()
+  await offline.getByRole('listitem').filter({hasText:'Supply list from camp'}).getByRole('button',{name:'Restore Supply list from camp',exact:true}).click()
   await expect(offline.getByRole('listitem').filter({hasText:'Supply list from camp'})).toHaveCount(0)
   await offline.getByRole('navigation',{name:'Library',exact:true}).getByRole('button',{name:'All pages',exact:true}).click()
   await expect.poll(async()=>(await(await call('source?id=2')).json()).text).toBe('Delivered by manual retry\nServer note before trash')
@@ -663,9 +1031,15 @@ try{
   const roster=offline.getByRole('dialog',{name:'Workspace members'})
   await expect(roster.getByLabel('Role for researcher')).toBeDisabled()
   for(const [name,registered] of [['steward',steward],['visitor',guest]] as const){
+    if(name==='visitor')await roster.getByLabel('Invitation role',{exact:true}).selectOption('editor')
     await roster.getByLabel('Account username').fill(name)
     await roster.getByRole('button',{name:'Send invitation'}).click()
     await expect(roster.getByRole('button',{name:'Revoke invitation to '+name})).toBeVisible()
+    if(name==='visitor'){
+      const revised=offline.waitForResponse(r=>r.request().method()==='PATCH'&&r.url().includes('/workspaces/invitations/'))
+      await roster.getByLabel('Invitation role for visitor').selectOption('viewer')
+      expect((await revised).ok()).toBe(true)
+    }
     const credentials={Cookie:registered.headers.get('set-cookie')!.split(';')[0]}
     const catalog=await(await fetch(origin+'/api/workspaces',{headers:credentials})).json()
     expect(catalog.workspaces).toEqual([])
@@ -729,7 +1103,7 @@ try{
   await expect(offline.getByRole('button',{name:'Export Replacement supplies as Markdown'})).toHaveCount(0)
   const recoveredMarkdown=await savedDownload(markdownButton,'Expedition log from camp.md')
   expect(recoveredMarkdown.toString()).toContain('Local observation after access changed')
-  await expect(offline.getByRole('status').filter({hasText:'Markdown exported'})).toBeVisible()
+  await expect(offline.getByRole('dialog',{name:'Unsynced edits on this device'}).getByRole('status').filter({hasText:'Markdown exported'})).toBeVisible()
   const recovered=await recover('Expedition log from camp','recovered-page.json')
   expect(recovered.writingText).toContain('Local observation after access changed')
   expect(recovered.renames).toEqual([{baseTitle:'Expedition log',title:'Expedition log from camp',operationId:expect.stringMatching(/^[0-9a-f]{32}$/)}]);
@@ -756,7 +1130,7 @@ try{
   await offline.getByLabel('Workspace name').fill('Another private library')
   await offline.getByRole('button',{name:'Create workspace',exact:true}).click()
   await expect(offline.getByRole('heading',{name:'All pages'})).toBeVisible()
-  await expect(offline.locator('html')).toHaveCSS('font-size','16px')
+  await expect(offline.locator('body')).toHaveCSS('font-size','16px')
   await first.close();firstStopped=true
   await offline.reload()
   await expect(offline.getByLabel('Workspace',{exact:true}).locator('option')).toHaveText(['Another private library'])
@@ -768,6 +1142,9 @@ try{
   await local.locator('input[accept*="markdown"]').setInputFiles({name:'Expedition log from camp.md',mimeType:'text/markdown',buffer:recoveredMarkdown})
   await expect(local.getByRole('heading',{name:'Expedition log from camp'})).toBeVisible()
   await expect(local.locator('.page-surface')).toContainText('Local observation after access changed')
+  // Leaving through the library checkpoints the import before Electron closes its last window.
+  await local.getByRole('navigation',{name:'Library',exact:true}).getByRole('button',{name:'All pages'}).click()
+  await expect(local.getByRole('heading',{name:'All pages',exact:true})).toBeVisible()
   console.log('Electron server connections, remote account and page, workspace catalog, profile isolation, offline binary downloads, offline restart, foreground merge, closed-page replay, manual sync retry and revoked-access recovery passed.')
 }finally{
   await peer?.close();await app.close();if(!firstStopped)await first.close();await second.close();await rm(dir,{recursive:true,force:true})

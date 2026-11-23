@@ -1,24 +1,25 @@
 /** Installation-wide registration and shared agent configuration are editable by the authenticated server administrator. */
+import {SettingsPanel} from './ui/settings-panel'
 import {useEffect,useState} from 'react'
 import {RotateCcw,Save,Settings2} from 'lucide-react'
-import {Button,Dialog,DialogContent,DialogTitle,DialogTrigger,Input,Label} from './ui'
+import {Checkbox,Button,Input,Label} from './ui'
 import {json} from './api'
 
 /** Read on each opening and show the policy the server acknowledged. */
-function RegistrationSetting(){
+function InstallationSetting({policy,children}:{policy:'registration'|'presence';children:string}){
   const [enabled,setEnabled]=useState<boolean>(),[busy,setBusy]=useState(false),[error,setError]=useState('')
   useEffect(()=>{
     let open=true
-    void json('server/settings').then(data=>{if(open)setEnabled(data.registration)}).catch(err=>{if(open)setError(err.message)})
+    void json('server/settings').then(data=>{if(open)setEnabled(data[policy])}).catch(err=>{if(open)setError(err.message)})
     return ()=>{open=false}
-  },[])
-  async function change(registration:boolean){
+  },[policy])
+  async function change(value:boolean){
     const previous=enabled
-    setEnabled(registration);setBusy(true);setError('')
-    try{setEnabled((await json('server/settings','PATCH',{registration})).registration)}
+    setEnabled(value);setBusy(true);setError('')
+    try{setEnabled((await json('server/settings','PATCH',{[policy]:value}))[policy])}
     catch(err){setEnabled(previous);setError((err as Error).message)}finally{setBusy(false)}
   }
-  return <><Label><input type="checkbox" checked={enabled??false} disabled={enabled===undefined||busy} onChange={event=>void change(event.target.checked)}/>Allow public account registration</Label>
+  return <><Label><Checkbox checked={enabled??false} disabled={enabled===undefined||busy} onCheckedChange={checked=>void change(checked===true)}/>{children}</Label>
     {error&&<p role="alert">{error}</p>}</>
 }
 
@@ -55,6 +56,5 @@ function ProviderSetting(){
 
 /** Open the same control from the workspace picker or a signed-in workspace. */
 export function ServerSettings(){
-  return <Dialog><DialogTrigger asChild><Button variant="ghost" size="icon-sm" aria-label="Server settings" title="Server settings"><Settings2/></Button></DialogTrigger>
-    <DialogContent aria-describedby={undefined}><DialogTitle>Server settings</DialogTitle><RegistrationSetting/><ProviderSetting/></DialogContent></Dialog>
+  return <SettingsPanel title="Server settings" trigger={<Button variant="ghost" size="icon-sm" aria-label="Server settings" title="Server settings"><Settings2/></Button>}><InstallationSetting policy="registration">Allow public account registration</InstallationSetting><InstallationSetting policy="presence">Allow document presence</InstallationSetting><ProviderSetting/></SettingsPanel>
 }

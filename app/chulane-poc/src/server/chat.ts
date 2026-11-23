@@ -1,38 +1,48 @@
 /** SQLite owns conversations, partial responses and review decisions. Every request supplies its authenticated workspace. */
+import {propertyQuery,type PropertyBatch,type PropertyQuery} from '../shared/tag-fields.ts'
 import type { DatabaseSync } from 'node:sqlite'
+import type {CanvasElementPreview} from './agent-canvas.ts'
+import {chatActivity} from './chat-activity.ts'
 import type { ServerResponse } from 'node:http'
 import { z } from 'zod'
 import type {reviewedDocuments} from './reviewed-documents.ts'
-import {textPrefix} from '../shared/document-text.ts'
+import {textPrefix,type DocumentTextBlock} from '../shared/document-text.ts'
 import {readAttachment} from './attachment-text.ts'
-import { agentDocument } from './agent-document.ts'
-import { apiConnection, pageRename, pluginDraft, environmentProvider, runAgent, type Provider } from './mastra.ts'
+import { agentCanvas,agentDocument,blockPreview,documentPreview } from './agent-document.ts'
+import { apiConnection, pageRename, pluginDraft, environmentProvider, runAgent, type Provider, type ProviderSettings } from './mastra.ts'
 import {createMarkdownPage,reviewPageDraft} from './markdown.ts'
 import {renamePage} from './page-titles.ts'
+import {HermesSetupError} from './local-agent.ts'
+import {createOnce,hasCreationReceipt} from './creation-receipts.ts'
 import {requireRequesterWrite} from './accounts.ts'
 import type {AgentEnvironment,AgentTurn,CitedAttachment,DocumentContext,LinkedMessage,MessageReviews} from './agent-environment.ts'
-import {browseProject,confirmProjectPath,createProject,projectName,renameProject,reviewProjectPath} from './projects.ts'
-import {searchWorkspace,type PageRetriever} from './retrieval.ts'
-import {LOCAL_AGENTS,MAX_BLOCK_LINKS,type PluginDraft,type Source} from '../shared/agent.ts'
+import {findProjects,browseProject,confirmProjectPath,createProject,projectName,renameProject,reviewProjectPath} from './projects.ts'
+import {workspaceDay} from '../shared/library.ts'
+import {canvasRead,canvasEdit,canvasValue} from '../shared/agent-canvas.ts'
+import {agentModes,pageSource,LOCAL_AGENTS,MAX_BLOCK_LINKS,MAX_PAGE_REFERENCES,type AppliedEdit,type LibrarySearchHit,type PluginDraft,type Source} from '../shared/agent.ts'
 
 const foregroundEnvironment:AgentEnvironment={run:runAgent}
 
 /** Keep historical file references small. Reading a cited passage checks current workspace access. */
 function citedAttachments(sources:Source[]):CitedAttachment[]{
   return sources.flatMap(({id,attachment})=>attachment
-    ?[{id,file:attachment.id,name:attachment.name,matchOffset:attachment.matchOffset}]:[])
+    ?[{id,file:attachment.id,name:attachment.name,matchOffset:attachment.matchOffset,readOffset:attachment.readOffset}]:[])
 }
 
 export type SavePluginFolder=(draft:PluginDraft,authorize:()=>void)=>Promise<string|null>
-type ChatActor={savePlugin?:SavePluginFolder;account:number|null;owner:boolean;write:boolean}
+const streamHeaders={'Content-Type':'application/x-ndjson','Cache-Control':'no-store','X-Accel-Buffering':'no'}
+type ChatActor={origin:string;canRead:()=>boolean;savePlugin?:SavePluginFolder;account:number|null;owner:boolean;write:boolean}
 
 function reject(status:number, message:string):never { throw Object.assign(new Error(message),{status}) }
 function valid<T>(schema:z.ZodType<T>, data:unknown):T {
   const parsed=schema.safeParse(data)
   return parsed.success ? parsed.data : reject(400,'Invalid agent request')
 }
+// Older applied edits retained only the resulting block. Keep their destination usable without guessing the request.
+const editBlockColumns=`e.block,CASE WHEN e.kind='text' AND e.status<>'applied' THEN e.block ELSE e.requestedBlock END AS requestedBlock`
+
 /** Install the agent storage and return request and shutdown operations owned by this service. */
-export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof reviewedDocuments>,retriever:PageRetriever,provider:Provider={get:environmentProvider},backgroundEnvironment:AgentEnvironment=foregroundEnvironment){
+export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof reviewedDocuments>,search:(workspace:number,query:string)=>Promise<LibrarySearchHit[]>,readProperties:(workspace:number,query:PropertyQuery)=>PropertyBatch,provider:Provider={get:environmentProvider},backgroundEnvironment:AgentEnvironment=foregroundEnvironment){
   db.exec(`
     CREATE TABLE IF NOT EXISTS chats(id INTEGER PRIMARY KEY, workspace INTEGER NOT NULL REFERENCES workspaces, title TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS chat_messages(id INTEGER PRIMARY KEY, chat INTEGER NOT NULL REFERENCES chats, role TEXT NOT NULL, text TEXT NOT NULL, status TEXT NOT NULL, sources TEXT NOT NULL DEFAULT '[]');
@@ -54,6 +64,10 @@ export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof revie
   }
   if(!db.prepare('PRAGMA table_info(chat_messages)').all().some(column=>column.name==='background'))
     db.exec('ALTER TABLE chat_messages ADD COLUMN background INTEGER NOT NULL DEFAULT 0')
+  if(!db.prepare('PRAGMA table_info(chat_edits)').all().some(column=>column.name==='requestedBlock'))
+    db.exec('ALTER TABLE chat_edits ADD COLUMN requestedBlock TEXT')
+  if(!db.prepare('PRAGMA table_info(chat_edits)').all().some(column=>column.name==='reviewedTitle'))
+    db.exec('ALTER TABLE chat_edits ADD COLUMN reviewedTitle TEXT')
   for(const table of ['chat_project_requests','chat_page_requests']){
     if(!db.prepare(`PRAGMA table_info(${table})`).all().some(column=>column.name==='reviewedPath'))
       db.exec(`ALTER TABLE ${table} ADD COLUMN reviewedPath TEXT`)
@@ -72,7 +86,13 @@ export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof revie
     db.exec('ALTER TABLE chats ADD COLUMN localAgent TEXT')
   if(!db.prepare('PRAGMA table_info(chat_messages)').all().some(column=>column.name==='pluginDraft'))
     db.exec('ALTER TABLE chat_messages ADD COLUMN pluginDraft TEXT')
-  const runs=new Map<number,{workspace:number;controller:AbortController;canRun:()=>boolean;finished:Promise<void>}>()
+  if(!db.prepare('PRAGMA table_info(chat_messages)').all().some(column=>column.name==='activity'))
+    db.exec("ALTER TABLE chat_messages ADD COLUMN activity TEXT NOT NULL DEFAULT '[]'")
+  if(!db.prepare('PRAGMA table_info(chat_messages)').all().some(column=>column.name==='mode'))
+    db.exec('ALTER TABLE chat_messages ADD COLUMN mode TEXT')
+  if(!db.prepare('PRAGMA table_info(chat_edits)').all().some(column=>column.name==='canvas'))
+    db.exec('ALTER TABLE chat_edits ADD COLUMN canvas INTEGER NOT NULL DEFAULT 0')
+  const runs=new Map<number,{workspace:number;message:number;observers:Map<ServerResponse,()=>boolean>;controller:AbortController;canRun:()=>boolean;finished:Promise<void>}>()
   let stopped=false
   const body=documents.read
   async function handle(path:string,method:string,ws:number,input:(limit?:number,allowEmpty?:boolean)=>Promise<unknown>,res:ServerResponse,canRun:()=>boolean,actor:ChatActor){
@@ -105,8 +125,18 @@ export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof revie
       if(!apiKey)reject(400,'Enter an OpenAI API key')
       return {message:await provider.save(apiKey,model)}
     }
-    if(path==='/api/agent/chats' && method==='POST')
-      return {id:Number(db.prepare("INSERT INTO chats(workspace,title,author) VALUES(?,'New chat',?)").run(ws,author).lastInsertRowid)}
+    if(path==='/api/agent/chats' && method==='POST'){
+      const {operationId,agent}=valid(z.object({operationId:z.string().optional(),agent:z.enum(LOCAL_AGENTS).optional()}),await input(undefined,true))
+      if(agent){
+        if(!provider.checkAgent)reject(403,'The server operator configures the provider')
+        if(!operationId||!hasCreationReceipt(db,actor.account,operationId))await provider.checkAgent(agent)
+      }
+      if(!canRun())reject(403,'Editor access required')
+      // Preserve existing receipts for conversations created with the device default.
+      return {id:createOnce(db,actor.account,operationId,agent?['chat',ws,agent]:['chat',ws],
+        ()=>Number(db.prepare("INSERT INTO chats(workspace,title,author,localAgent) VALUES(?,'New chat',?,?)").run(ws,author,agent??null).lastInsertRowid),
+        id=>!!db.prepare('SELECT 1 FROM chats WHERE workspace=? AND id=? AND deleted=0').get(ws,id))}
+    }
     const route=/^\/api\/agent\/chats\/(\d+)(?:\/(turn|edits|pages|projects|provider|plugins)(?:\/(\d+)\/(apply|dismiss|save))?)?$/.exec(path)
     if(!route)reject(404,'Unknown chat operation')
     const chat=Number(route[1])
@@ -141,7 +171,7 @@ export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof revie
         db.prepare('DELETE FROM chat_project_requests WHERE message IN (SELECT id FROM chat_messages WHERE chat=?)').run(chat)
         db.prepare('DELETE FROM chat_edits WHERE message IN (SELECT id FROM chat_messages WHERE chat=?)').run(chat)
         // Keep allocated chat and task IDs so stale URLs or cancellation requests cannot target a new conversation.
-        db.prepare("UPDATE chat_messages SET text='',sources='[]',pluginDraft=NULL,requester=NULL,background=0,status='deleted' WHERE chat=?").run(chat)
+        db.prepare("UPDATE chat_messages SET text='',sources='[]',activity='[]',pluginDraft=NULL,requester=NULL,background=0,status='deleted' WHERE chat=?").run(chat)
         db.prepare("UPDATE chats SET deleted=1,title='',author=NULL WHERE id=?").run(chat)
         db.exec('COMMIT')
       }catch(error){db.exec('ROLLBACK');throw error}
@@ -149,17 +179,17 @@ export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof revie
       return {}
     }
     if(!route[2] && method==='GET')return {
-      messages:db.prepare('SELECT id,role,text,status,sources,pluginDraft,(SELECT name FROM accounts WHERE id=requester) AS requestedBy FROM chat_messages WHERE chat=? ORDER BY id').all(chat).map(({pluginDraft,...m})=>({...m,sources:JSON.parse(String(m.sources)),...(pluginDraft?{pluginDraft:JSON.parse(String(pluginDraft))}:{})})),
+      messages:db.prepare('SELECT id,role,text,status,sources,mode,activity,pluginDraft,(SELECT name FROM accounts WHERE id=requester) AS requestedBy FROM chat_messages WHERE chat=? ORDER BY id').all(chat).map(({pluginDraft,activity,...m})=>({...m,...(activity!=='[]'&&{activity:JSON.parse(String(activity))}),sources:JSON.parse(String(m.sources)),...(pluginDraft?{pluginDraft:JSON.parse(String(pluginDraft))}:{})})),
       pages:db.prepare('SELECT r.id,r.message,r.title,r.markdown,r.parent,r.parentName,r.reviewedPath,r.page,r.status,(SELECT name FROM accounts WHERE id=r.reviewer) AS reviewedBy FROM chat_page_requests r JOIN chat_messages m ON m.id=r.message WHERE m.chat=? ORDER BY r.id').all(chat),
       projects:db.prepare('SELECT r.id,r.message,r.name,r.beforeName,r.parent,r.parentName,r.reviewedPath,r.project,r.status,(SELECT name FROM accounts WHERE id=r.reviewer) AS reviewedBy FROM chat_project_requests r JOIN chat_messages m ON m.id=r.message WHERE m.chat=? ORDER BY r.id').all(chat),
-      edits:db.prepare('SELECT e.id,e.message,e.page,e.title,e.block,e.before,e.after,e.status,e.kind,(SELECT name FROM accounts WHERE id=e.reviewer) AS reviewedBy FROM chat_edits e JOIN chat_messages m ON m.id=e.message WHERE m.chat=? ORDER BY e.id').all(chat),
+      edits:db.prepare(`SELECT e.id,e.message,e.page,e.title,e.reviewedTitle,${editBlockColumns},e.before,e.after,e.status,CASE WHEN e.canvas THEN 'canvas' ELSE e.kind END AS kind,(SELECT name FROM accounts WHERE id=e.reviewer) AS reviewedBy FROM chat_edits e JOIN chat_messages m ON m.id=e.message WHERE m.chat=? ORDER BY e.id`).all(chat),
     }
-    if((route[2]==='projects'||route[2]==='pages')&&route[3]&&(route[4]==='apply'||route[4]==='dismiss')&&method==='POST'){
-      const apply=route[4]==='apply',review=apply?await input(undefined,true):{}
-      const page=route[2]==='pages',table=page?'chat_page_requests':'chat_project_requests',resultKey=page?'page':'project'
+    /** Manual approval and preauthorized agent actions use identical transactions and access checks. */
+    function decideCreation(kind:'pages'|'projects',id:number,apply:boolean,review:unknown){
+      const page=kind==='pages',table=page?'chat_page_requests':'chat_project_requests',resultKey=page?'page':'project'
       db.exec('BEGIN IMMEDIATE')
       try{
-        const item=db.prepare(`SELECT r.*,m.requester FROM ${table} r JOIN chat_messages m ON m.id=r.message WHERE m.chat=? AND r.id=? AND r.status='pending'`).get(chat,Number(route[3]))
+        const item=db.prepare(`SELECT r.*,m.requester FROM ${table} r JOIN chat_messages m ON m.id=r.message WHERE m.chat=? AND r.id=? AND r.status='pending'`).get(chat,id)
         if(!item)reject(409,'This proposal is no longer pending')
         if(apply)requireRequesterWrite(db,ws,item.requester===null?null:Number(item.requester))
         const reviewedPath=apply?confirmProjectPath(db,ws,item.parent===null?null:Number(item.parent),item.parentName as string|null,review):null
@@ -170,18 +200,20 @@ export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof revie
         db.exec('COMMIT');return {[resultKey]:result}
       }catch(error){db.exec('ROLLBACK');throw error}
     }
-    if(route[2]==='edits' && route[3] && method==='POST'){
-      const edit=db.prepare('SELECT e.*,m.requester FROM chat_edits e JOIN chat_messages m ON m.id=e.message WHERE m.chat=? AND e.id=?').get(chat,Number(route[3]))
+    /** Recheck a pending edit against live content and record its result in the same transaction. */
+    function decideEdit(id:number,apply:boolean,shownTitle?:string):AppliedEdit|null{
+      const edit=db.prepare('SELECT e.*,m.requester FROM chat_edits e JOIN chat_messages m ON m.id=e.message WHERE m.chat=? AND e.id=?').get(chat,id)
       if(!edit || edit.status!=='pending')reject(409,'This proposal is no longer pending')
-      if(route[4]==='dismiss'){
+      if(!apply){
         const saved=db.prepare("UPDATE chat_edits SET status='dismissed',reviewer=? WHERE id=? AND status='pending'").run(actor.account,edit.id)
         if(!saved.changes)reject(409,'This proposal is no longer pending')
-        return {}
+        return null
       }
       // Commit the decision with its mutation so a concurrent dismissal or access change rolls both back.
+      const reviewedTitle=edit.kind==='rename'?edit.before:shownTitle??edit.title
       const markApplied=(block:string)=>{
         requireRequesterWrite(db,ws,edit.requester===null?null:Number(edit.requester))
-        const saved=db.prepare("UPDATE chat_edits SET status='applied',block=?,reviewer=? WHERE id=? AND status='pending'").run(block,actor.account,edit.id)
+        const saved=db.prepare("UPDATE chat_edits SET status='applied',requestedBlock=CASE WHEN kind='text' THEN block END,block=?,reviewer=?,reviewedTitle=? WHERE id=? AND status='pending'").run(block,actor.account,reviewedTitle,edit.id)
         if(!saved.changes)reject(409,'This proposal is no longer pending')
       }
       if(edit.kind==='rename'){
@@ -190,27 +222,35 @@ export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof revie
           markApplied('')
           if(body(ws,Number(edit.page)).title!==edit.before)reject(409,'The page title changed. Ask for a fresh rename.')
           renamePage(db,ws,Number(edit.page),{title:String(edit.after),base:String(edit.before)})
-          db.exec('COMMIT');return {}
+          db.exec('COMMIT');return null
         }catch(error){db.exec('ROLLBACK');throw error}
       }
-      return documents.apply(ws,{page:Number(edit.page),block:String(edit.block),before:String(edit.before),after:String(edit.after)},markApplied)
+      return documents.apply(ws,{page:Number(edit.page),block:String(edit.block),before:String(edit.before),after:String(edit.after),canvas:!!edit.canvas},reviewedTitle,markApplied)
+    }
+    if(route[3]&&method==='POST'&&(route[4]==='apply'||route[4]==='dismiss')){
+      const apply=route[4]==='apply',id=Number(route[3])
+      if(route[2]==='pages'||route[2]==='projects')return decideCreation(route[2],id,apply,apply?await input(undefined,true):{})
+      if(route[2]==='edits')return decideEdit(id,apply,apply?valid(z.object({reviewedTitle:z.string().optional()}),await input(undefined,true)).reviewedTitle:undefined)??{}
+    }
+    if(route[2]==='turn'&&!route[3]&&method==='GET'){
+      const run=runs.get(chat)
+      if(!run||run.controller.signal.aborted){res.writeHead(204,{'Cache-Control':'no-store'});res.end();return}
+      run.observers.set(res,actor.canRead)
+      res.once('close',()=>run.observers.delete(res))
+      res.writeHead(200,streamHeaders)
+      // Subscribe before the reader fetches history so every later delta is buffered on this connection.
+      res.write(JSON.stringify({message:run.message})+'\n')
+      return
     }
     if(route[2]!=='turn' || route[3] || method!=='POST')reject(405,'Chat operation unavailable')
-    const {text,page,references,blockLinks,allowEdits,background}=valid(z.object({background:z.boolean().default(false),allowEdits:z.boolean().default(true),text:z.string().trim().min(1).max(12000),page:z.number().int().positive().nullable(),references:z.array(z.number().int().positive()).max(3).default([]),blockLinks:z.array(z.object({id:z.number().int().positive(),block:z.string().min(1).max(1024)})).max(MAX_BLOCK_LINKS).default([])}),await input())
+    const {operationId,...turn}=valid(z.object({operationId:z.string().optional(),background:z.boolean().default(false),allowEdits:z.boolean().default(true),mode:z.enum(agentModes).optional(),surface:z.enum(['canvas','page']).optional(),text:z.string().trim().min(1).max(12000),page:z.number().int().positive().nullable(),references:z.array(z.number().int().positive()).max(MAX_PAGE_REFERENCES).default([]),blockLinks:z.array(z.object({id:z.number().int().positive(),block:z.string().min(1).max(1024)})).max(MAX_BLOCK_LINKS).default([])}),await input())
     if(stopped)reject(503,'Agent service stopped')
     if(!canRun())reject(403,'Editor access required')
-    const currentChat=getChat.get(chat,ws)
-    if(!currentChat)reject(404,'Chat unavailable')
-    const defaults=provider.get()
-    // A restored desktop database never enables local executables on a hosted server.
-    const pinned=provider.checkAgent&&LOCAL_AGENTS.find(agent=>agent===currentChat.localAgent)
-    const config=pinned?{...defaults,agent:pinned}:defaults
-    if(!config.agent&&!config.key)reject(503,'Configure the OpenAI provider to start a turn')
-    if(runs.has(chat))reject(409,'A turn is already running in this chat')
-    if(page!==null)body(ws,page)
-    const attached=[...new Set(references)].filter(id=>id!==page).map(id=>{const target=body(ws,id);return {id,title:target.title}})
-    // Resolve each linked page once, before accepting the turn. Only stable identities come from the client.
-    const linkedPages=new Map<number,{title:string;blocks:Map<string,string>}>()
+    const currentChat=getChat.get(chat,ws)??reject(404,'Chat unavailable')
+    const {text,page,references,blockLinks,background}=turn
+    const mode=turn.allowEdits?(turn.mode??'suggest'):'ask',allowEdits=mode!=='ask'
+    let config:ProviderSettings
+    let attached:Source[]
     const linkedSources:Source[]=[]
     const referencedBlocks:AgentTurn['referencedBlocks']=[]
     type ObservedBlock={prefix:string;complete:boolean}
@@ -224,20 +264,60 @@ export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof revie
       known.set(block,{prefix:seen,complete:seen===content})
       observed.set(id,known)
     }
-    for(const {id,block} of blockLinks){
-      if(referencedBlocks.some(item=>item.page===id && item.block===block))continue
-      let target=linkedPages.get(id)
-      if(!target){
-        const pageBody=body(ws,id)
-        target={title:pageBody.title,blocks:new Map(agentDocument(pageBody).blocks.map(b=>[b.id,b.text]))}
-        linkedPages.set(id,target)
+    let userMessage=0
+    const missingContext=Object.assign(Error('Linked context is unavailable. Restore or remove the affected blocks.'),{blocks:[] as typeof blockLinks})
+    /** Resolve current context only for a new turn. Accepted retries use the saved message. */
+    function acceptTurn(){
+      const defaults=provider.get()
+      // A restored desktop database never enables local executables on a hosted server.
+      const pinned=provider.checkAgent&&LOCAL_AGENTS.find(agent=>agent===currentChat.localAgent)
+      config=pinned?{...defaults,agent:pinned}:defaults
+      if(!config.agent&&!config.key)reject(503,'Configure the OpenAI provider to start a turn')
+      if(runs.has(chat))reject(409,'A turn is already running in this chat')
+      if(page!==null)body(ws,page)
+      attached=[...new Set(references)].filter(id=>id!==page).map(id=>pageSource(body(ws,id)))
+      const linkedPages=new Map<number,{title:string;day?:string;blocks:Map<string,DocumentTextBlock>}>()
+      const uniqueLinks=new Map(blockLinks.map(link=>[link.id+'/'+link.block,link]))
+      for(const {id,block} of uniqueLinks.values()){
+        let target=linkedPages.get(id)
+        if(!target){
+          const pageBody=body(ws,id)
+          target={...pageSource(pageBody),blocks:new Map((documents.liveText(id)??agentDocument(pageBody)).blocks.map(b=>[b.id,b]))}
+          linkedPages.set(id,target)
+        }
+        const item=target.blocks.get(block)
+        if(!item){
+          missingContext.blocks.push({id,block})
+          continue
+        }
+        const preview=blockPreview(item,2400)
+        referencedBlocks.push({page:id,...(target.day&&{day:target.day}),block,truncated:false,...preview})
+        observe(id,block,item.text,0,preview.text.length)
+        linkedSources.push({id,title:target.title,block,excerpt:textPrefix(item.text,60)||'Empty block'})
       }
-      const content=target.blocks.get(block)
-      if(content===undefined)reject(409,'A linked block is unavailable. Remove its link and try again.')
-      const text=textPrefix(content,2400)
-      referencedBlocks.push({page:id,block,text,truncated:text!==content,...(text!==content&&{nextOffset:text.length})})
-      observe(id,block,content,0,text.length)
-      linkedSources.push({id,title:target.title,block,excerpt:textPrefix(content,60)||'Empty block'})
+      if(missingContext.blocks.length)throw missingContext
+      const add=db.prepare('INSERT INTO chat_messages(chat,role,text,status,sources,requester) VALUES(?,?,?,?,?,?)')
+      db.prepare("UPDATE chats SET title=? WHERE id=? AND NOT EXISTS(SELECT 1 FROM chat_messages WHERE chat=?)").run(textPrefix(text,64),chat,chat)
+      userMessage=Number(add.run(chat,'user',text,'sent',JSON.stringify([...attached,...linkedSources]),actor.account).lastInsertRowid)
+      const id=Number(add.run(chat,'assistant','','running',JSON.stringify(linkedSources),actor.account).lastInsertRowid)
+      db.prepare('UPDATE chat_messages SET background=?,mode=? WHERE id=?').run(Number(background),mode,id)
+      return id
+    }
+    let message:number
+    try{
+      message=createOnce(db,actor.account,operationId,['turn',ws,chat,turn],acceptTurn,
+        id=>!!db.prepare("SELECT 1 FROM chat_messages WHERE chat=? AND id=? AND role='assistant'").get(chat,id))
+    }catch(error){
+      if(error!==missingContext)throw error
+      res.writeHead(409,{'Content-Type':'application/json','Cache-Control':'no-store'})
+      res.end(JSON.stringify({error:missingContext.message,unavailableBlock:missingContext.blocks[0],unavailableBlocks:missingContext.blocks}))
+      return
+    }
+    if(!userMessage){
+      // The stream belongs to the original request. This client can load the recorded response by ID.
+      res.writeHead(background?202:200,{'Content-Type':background?'application/json':'application/x-ndjson','Cache-Control':'no-store'})
+      res.end(JSON.stringify(background?{task:message,chat,replayed:true}:{message,replayed:true})+'\n')
+      return
     }
     const controller=new AbortController(),signal=AbortSignal.any([controller.signal,AbortSignal.timeout(180000)])
     const close=()=>controller.abort()
@@ -247,17 +327,19 @@ export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof revie
     const sources=new Map<number,Source>()
     const attachmentSources=new Map<number,Source>()
     const saveSources=()=>db.prepare('UPDATE chat_messages SET sources=? WHERE id=?').run(JSON.stringify([...sources.values(),...linkedSources,...attachmentSources.values()]),message)
-    const add=db.prepare('INSERT INTO chat_messages(chat,role,text,status,sources,requester) VALUES(?,?,?,?,?,?)')
-    db.exec('BEGIN IMMEDIATE')
-    let message:number,userMessage:number
-    try{
-      db.prepare("UPDATE chats SET title=? WHERE id=? AND NOT EXISTS(SELECT 1 FROM chat_messages WHERE chat=?)").run(textPrefix(text,64),chat,chat)
-      userMessage=Number(add.run(chat,'user',text,'sent',JSON.stringify([...attached,...linkedSources]),actor.account).lastInsertRowid)
-      message=Number(add.run(chat,'assistant','','running',JSON.stringify(linkedSources),actor.account).lastInsertRowid)
-      if(background)db.prepare('UPDATE chat_messages SET background=1 WHERE id=?').run(message)
-      db.exec('COMMIT')
-    }catch(error){db.exec('ROLLBACK');throw error}
-    const notify=(event:object)=>{if(!background&&!res.destroyed)res.write(JSON.stringify(event)+'\n')}
+    const observers=new Map<ServerResponse,()=>boolean>()
+    const notifySender=(event:object)=>{if(!background&&!res.destroyed)res.write(JSON.stringify(event)+'\n')}
+    /** A slow reader catches up from durable history independently of the provider and other readers. */
+    function notify(event:object){
+      const line=JSON.stringify(event)+'\n'
+      if(!background&&!res.destroyed)res.write(line)
+      for(const [reader,canRead] of observers){
+        if(canRead()&&reader.write(line))continue
+        observers.delete(reader);reader.end()
+      }
+    }
+    let answerLength=0
+    const recordActivity=chatActivity(db,message,(part,detailOffset)=>notify({message,part,detailOffset}))
     /** Bind each tool and each published result to the initiating session throughout the run. */
     function requireAccess(){
       if(!signal.aborted&&!canRun())controller.abort()
@@ -265,7 +347,7 @@ export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof revie
     }
     // Reserve the chat before the environment starts, including environments that finish synchronously.
     const finished=Promise.resolve().then(executeTurn)
-    runs.set(chat,{workspace:ws,controller,canRun,finished})
+    runs.set(chat,{workspace:ws,message,observers,controller,canRun,finished})
     return finished
 
     async function executeTurn(){
@@ -275,43 +357,42 @@ export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof revie
           res.end(JSON.stringify({task:message,chat}))
         }else{
           res.once('close',close)
-          res.writeHead(200,{'Content-Type':'application/x-ndjson','Cache-Control':'no-store','X-Accel-Buffering':'no'})
+          res.writeHead(200,streamHeaders)
         }
         if(!background&&res.destroyed)controller.abort()
         requireAccess()
+        /** Keep one citation per block. A range read or search can identify a more specific passage. */
+        function citeBlock(source:Source){
+          const index=linkedSources.findIndex(saved=>saved.id===source.id&&saved.block===source.block)
+          if(index<0)linkedSources.push(source)
+          else if(source.readFrom)linkedSources[index]=source
+        }
         /** Persist the source when either a document preview or a text range is read. */
-        function cite(id:number,title:string,block?:{id:string;text:string},surface?:Source['surface']){
+        function cite(id:number,title:string,block?:{id:string;text:string},surface?:Source['surface'],range?:Pick<Source,'readFrom'|'excerpt'|'excerptOffset'>){
           readTitles.set(id,title)
-          sources.set(id,{...sources.get(id),id,title,...(surface&&{surface})})
-          if(block&&!linkedSources.some(source=>source.id===id&&source.block===block.id)){
-            linkedSources.push({id,title,block:block.id,excerpt:textPrefix(block.text,60)||'Empty block'})
-          }
+          sources.set(id,{...sources.get(id),id,title,...(surface&&{surface,...range})})
+          if(block)citeBlock({id,title,block:block.id,excerpt:textPrefix(block.text,60)||'Empty block',...range})
           saveSources()
         }
         const read=(id:number,offsetOrBlock:number|string,surface?:Source['surface']):DocumentContext=>{
           requireAccess()
-          const target=body(ws,id), {blocks:all,canvasText}=agentDocument(target)
+          const target=body(ws,id), document=documents.liveText(id)??agentDocument(target)
+          const all=document.blocks
           const linked=typeof offsetOrBlock==='string'
           const offset=linked?all.findIndex(block=>block.id===offsetOrBlock):offsetOrBlock
-          if(offset<0)reject(404,'Block unavailable')
-          const blocks:DocumentContext['blocks']=[]
-          const canvas=!linked&&offset===0?textPrefix(canvasText,4000):''
-          let budget=24000-canvas.length
-          for(const block of all.slice(offset,offset+(linked?1:40))){
-            const text=textPrefix(block.text,12000)
-            if(blocks.length && text.length>budget)break
-            blocks.push(text===block.text?{id:block.id,text}:{id:block.id,text,truncated:true,nextOffset:text.length});budget-=text.length
-          }
-          blocks.forEach((b,i)=>observe(id,b.id,all[offset+i].text,0,b.text.length))
+          if(linked&&offset<0)reject(404,'Block unavailable')
+          const preview=documentPreview(document,offset,linked)
+          preview.blocks.forEach((b,i)=>observe(id,b.id,all[offset+i].text,0,b.text.length))
           cite(id,target.title,linked?all[offset]:undefined,surface)
-          return {id,title:target.title,blocks,...(canvas&&{canvasText:canvas,canvasTextTruncated:canvas.length<canvasText.length,...(canvas.length<canvasText.length&&{canvasNextOffset:canvas.length})}),more:!linked&&offset+blocks.length<all.length}
+          return {...pageSource(target),...(surface&&{surface}),...preview}
         }
         notify({message})
-        const current=page===null?null:read(page,0)
+        const current=page===null?null:read(page,0,turn.surface==='canvas'?'canvas':undefined)
         const referencedDocuments=attached.map(source=>read(source.id,0))
         /** Include stable target and request IDs. The current turn must still read the document before editing. */
         function reviews(message:number):MessageReviews{
-          const edits=db.prepare("SELECT id,page,title,block,kind,CASE WHEN kind='rename' THEN after END AS proposedTitle,status FROM chat_edits WHERE message=? ORDER BY id").all(message) as MessageReviews['edits']
+          const edits=db.prepare(`SELECT e.id,e.page,COALESCE(e.reviewedTitle,e.title) AS title,${editBlockColumns},CASE WHEN e.canvas THEN 'canvas' ELSE e.kind END AS kind,
+            CASE WHEN e.kind='rename' THEN e.after END AS proposedTitle,e.status FROM chat_edits e WHERE e.message=? ORDER BY e.id`).all(message) as MessageReviews['edits']
           const pages=db.prepare('SELECT id,title,parent,parentName,reviewedPath,page,status FROM chat_page_requests WHERE message=? ORDER BY id').all(message) as MessageReviews['pages']
           const projects=db.prepare('SELECT id,name,beforeName,parent,parentName,reviewedPath,project,status FROM chat_project_requests WHERE message=? ORDER BY id').all(message) as MessageReviews['projects']
           return {message,edits,pages,projects}
@@ -336,8 +417,81 @@ export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof revie
           return {role,content}
         })
         const environment=background?backgroundEnvironment:foregroundEnvironment
-        await environment.run({settings:config,history,current,referencedDocuments,referencedBlocks,signal,tools:{
-          read,
+        const timeZone=String(db.prepare('SELECT timeZone FROM workspaces WHERE id=?').get(ws)!.timeZone)
+        const workspaceCalendar={timeZone,today:workspaceDay(timeZone)}
+        const seenElements=new Map<number,Map<string,CanvasElementPreview>>()
+        function readCanvas(id:number,offset:number){
+          requireAccess()
+          valid(canvasRead,{id,offset})
+          const target=body(ws,id),batch=agentCanvas(target,offset)
+          const seen=seenElements.get(id)??new Map<string,CanvasElementPreview>()
+          for(const element of batch.elements)seen.set(element.id,element)
+          seenElements.set(id,seen)
+          cite(id,target.title,undefined,'canvas')
+          return batch
+        }
+        if(current&&turn.surface==='canvas'){
+          current.canvas=readCanvas(current.id,0)
+        }
+        /** The host classifies the actual mutation. Neither the model nor the caller can mark a replacement as an append. */
+        function submitted(kind:'edits'|'pages'|'projects',pending:number,append=false,path?:string|null){
+          if(mode!=='full'&&!(mode==='append'&&append)){notify({proposal:pending});return {pending}}
+          requireAccess()
+          if(kind!=='edits'){
+            const result=decideCreation(kind,pending,true,{reviewedPath:path??null})
+            notify({proposal:pending})
+            return {applied:pending,...result}
+          }
+          const result=decideEdit(pending,true)
+          if(result)notifySender({appliedEdit:result})
+          notify({proposal:pending})
+          return {applied:pending,...(result&&{page:result.page,block:result.block})}
+        }
+        await environment.run({mode,settings:config,history,workspaceCalendar,current,referencedDocuments,referencedBlocks,signal,tools:{
+          read,readCanvas,
+          editCanvas:allowEdits?input=>{
+            requireAccess()
+            const {id,element,value}=valid(canvasEdit,input)
+            const target=body(ws,id)
+            if(!readTitles.has(id))reject(409,'Read the canvas before editing it.')
+            const seen=element?seenElements.get(id)?.get(element):undefined
+            if(element&&(!seen||seen.truncated||!canvasValue.shape.type.safeParse(seen.type).success))reject(409,'Read an editable canvas element before changing it.')
+            if(!element&&!value)reject(400,'Choose an element to remove.')
+            if(seen&&value&&value.type!==seen.type)reject(400,'Keep the original element type.')
+            const saved=db.prepare('INSERT INTO chat_edits(message,page,title,block,before,after,canvas) VALUES(?,?,?,?,?,?,1)')
+              .run(message,id,target.title,element??'',seen?JSON.stringify(seen):'',value?JSON.stringify(value):'')
+            const result=submitted('edits',Number(saved.lastInsertRowid),!element)
+            if('applied' in result&&'block' in result)return {applied:result.applied,page:id,element:result.block}
+            return result
+          }:undefined,
+          readProperties(input){
+            requireAccess()
+            const batch=readProperties(ws,valid(propertyQuery,input))
+            const source={...pageSource(batch),...(batch.block&&{block:batch.block})}
+            if(batch.block)citeBlock(source)
+            else if(!sources.has(batch.id))sources.set(batch.id,source)
+            saveSources()
+            return batch
+          },
+          listPageLinks(id,after,direction){
+            requireAccess()
+            const batch=documents.listPageLinks(ws,id,after,actor.origin,direction)
+            if(direction==='incoming'&&batch.entries.length){
+              // A backlink can cite a source without counting its unread content as reviewed for editing.
+              for(const entry of batch.entries)if(!sources.has(entry.id))sources.set(entry.id,entry)
+              saveSources()
+            }
+            return batch
+          },
+          listJournal(before){
+            requireAccess()
+            return documents.listJournal(ws,before)
+          },
+          readJournalDay(day){
+            requireAccess()
+            const id=documents.journalPageId(ws,day==='today'?workspaceCalendar.today:day)
+            return id===null?null:read(id,0)
+          },
           listReviews(before){
             requireAccess()
             const rows=db.prepare(`SELECT m.id FROM chat_messages m WHERE m.chat=? AND m.id<? AND m.role='assistant' AND
@@ -353,7 +507,7 @@ export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof revie
               ORDER BY id DESC LIMIT 5`).all(chat,Math.min(before??userMessage,userMessage))
             const messages=rows.slice(0,4).map((row):LinkedMessage=>{
               const sources=JSON.parse(String(row.sources)) as Source[]
-              const links=sources.filter(source=>!source.attachment).map(({id,title,block,surface})=>({id,title,block,surface}))
+              const links=sources.filter(source=>!source.attachment).map(({id,title,block,surface,readFrom})=>({id,title,block,surface,...(readFrom&&{readFrom})}))
               return {message:Number(row.id),role:row.role==='user'?'user':'assistant',prompt:String(row.prompt),links,
                 ...(row.role==='assistant'&&{attachments:citedAttachments(sources)})}
             })
@@ -363,42 +517,60 @@ export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof revie
             if(block&&surface)reject(400,'Choose a writing block or Canvas view.')
             const document=read(id,block??0,surface??undefined)
             // Navigation is delivered once to the initiating window. Reopening shared history only shows the citation.
-            notify({openPage:{id,title:document.title,...(block&&{block}),...(surface&&{surface})}})
+            notifySender({openPage:{id,title:document.title,...(block&&{block}),...(surface&&{surface})}})
             return document
           },
           readAttachment(id,file,offset){
             requireAccess()
             const result=readAttachment(db,ws,id,file,offset)
-            if(file!==null&&'text' in result){
+            if(typeof file==='number'&&'text' in result){
               const previous=attachmentSources.get(file)?.attachment
-              attachmentSources.set(file,{id,title:result.title,attachment:{...previous,id:file,name:result.name,excerpt:textPrefix(result.text,320)||previous?.excerpt||''}})
+              attachmentSources.set(file,{id,title:result.title,attachment:{...previous,id:file,name:result.name,excerpt:previous?.excerpt??'',...(result.text&&{excerpt:textPrefix(result.text,320),readOffset:offset})}})
               saveSources()
             }
             return result
           },
-          readText(id,block,offset){
+          readText(id,block,offset,citationMessage,field){
             requireAccess()
-            const {title,item,passage}=documents.readPassage(ws,id,block,offset)
-            if(item)observe(id,item.id,item.text,offset,offset+passage.text.length)
-            cite(id,title,item,block===null?'canvas':undefined)
+            let anchor:{excerpt:string;inside:number}|undefined
+            if(citationMessage!=null){
+              const row=db.prepare("SELECT sources FROM chat_messages WHERE chat=? AND id=? AND id<? AND role='assistant'").get(chat,citationMessage,userMessage)
+              const source=row&&(JSON.parse(String(row.sources)) as Source[]).find(s=>s.id===id&&s.readFrom?.block===block&&s.readFrom.offset===offset&&s.readFrom.field===(field??undefined))
+              if(!source)reject(404,'Passage citation unavailable in this conversation.')
+              // Earlier saved citations carry only an offset. New citations also locate it inside the saved excerpt.
+              if(source.excerpt&&source.excerptOffset!==undefined)anchor={excerpt:source.excerpt,inside:source.excerptOffset}
+            }
+            const {title,item,offset:start,passage}=documents.readPassage(ws,id,block,offset,anchor,field)
+            if(item&&!field)observe(id,item.id,item.text,start,start+passage.text.length)
+            const range=passage.text?{readFrom:{block,offset:start,...(field&&{field})},excerpt:textPrefix(passage.text,60),excerptOffset:0}:undefined
+            cite(id,title,item,block===null?'canvas':undefined,range)
             return passage
           },
-          browse(project,offset){
+          findProjects(name,offset,match){
             requireAccess()
-            const result=browseProject(db,ws,project,offset)
+            const result=findProjects(db,ws,name,offset,match)
+            for(const entry of result.entries)browsedProjects.set(entry.id,entry.name)
+            return result
+          },
+          browse(project,offset,name){
+            requireAccess()
+            const result=browseProject(db,ws,project,offset,name)
             for(const entry of result.entries)if(entry.kind==='project')browsedProjects.set(entry.id,entry.name)
             return result
           },
           async search(query){
             requireAccess()
-            const results=await searchWorkspace(db,documents.liveText,retriever,ws,query)
+            const results=await search(ws,query)
             requireAccess()
             for(const hit of results){
-              if(!hit.block&&(hit.excerpt||!hit.attachment))sources.set(hit.id,{id:hit.id,title:hit.title,surface:hit.surface,excerpt:hit.excerpt})
-              if(hit.attachment)attachmentSources.set(hit.attachment.id,{id:hit.id,title:hit.title,attachment:hit.attachment})
-              if(hit.block&&!linkedSources.some(source=>source.id===hit.id&&source.block===hit.block)){
-                linkedSources.push({id:hit.id,title:hit.title,block:hit.block,excerpt:hit.excerpt})
+              if(!hit.block&&(hit.excerpt||!hit.attachment))sources.set(hit.id,{id:hit.id,title:hit.title,surface:hit.surface,excerpt:hit.excerpt,readFrom:hit.readFrom,excerptOffset:hit.excerptOffset})
+              if(hit.attachment){
+                // Keep the last passage read even if a later search finds a different location in this file.
+                const read=attachmentSources.get(hit.attachment.id)?.attachment
+                attachmentSources.set(hit.attachment.id,{id:hit.id,title:hit.title,attachment:{...hit.attachment,
+                  ...(read?.readOffset!==undefined&&{readOffset:read.readOffset,excerpt:read.excerpt})}})
               }
+              if(hit.block)citeBlock({id:hit.id,title:hit.title,block:hit.block,excerpt:hit.excerpt,readFrom:hit.readFrom,excerptOffset:hit.excerptOffset})
             }
             if(results.length)saveSources()
             return results
@@ -425,14 +597,14 @@ export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof revie
             if(change.title===current)reject(400,'The title makes no change')
             const saved=db.prepare("INSERT INTO chat_edits(message,page,title,block,before,after,kind) VALUES(?,?,?,'',?,?,'rename')").run(message,id,current,current,change.title)
             const pending=Number(saved.lastInsertRowid)
-            notify({proposal:pending});return {pending}
+            return submitted('edits',pending)
           }:undefined,
           proposePage:allowEdits?(title,project,markdown)=>{
             requireAccess()
             const request=reviewPageDraft(db,ws,{title,project,markdown})
             const saved=db.prepare('INSERT INTO chat_page_requests(message,title,markdown,parent,parentName) VALUES(?,?,?,?,?)').run(message,request.title,request.draft.markdown,request.draft.project,request.draft.projectName)
             const pending=Number(saved.lastInsertRowid)
-            notify({proposal:pending});return {pending}
+            return submitted('pages',pending,false,request.draft.projectName)
           }:undefined,
           proposeProjectRename:allowEdits?(id,name)=>{
             requireAccess()
@@ -444,14 +616,14 @@ export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof revie
             const saved=db.prepare('INSERT INTO chat_project_requests(message,name,beforeName,parent,parentName,project) VALUES(?,?,?,?,?,?)')
               .run(message,next,before,parent,reviewProjectPath(db,ws,parent),id)
             const pending=Number(saved.lastInsertRowid)
-            notify({proposal:pending});return {pending}
+            return submitted('projects',pending,false,reviewProjectPath(db,ws,parent))
           }:undefined,
           proposeProject:allowEdits?(name,parent)=>{
             requireAccess()
             const parentName=reviewProjectPath(db,ws,parent)
             const saved=db.prepare('INSERT INTO chat_project_requests(message,name,parent,parentName) VALUES(?,?,?,?)').run(message,name,parent,parentName)
             const pending=Number(saved.lastInsertRowid)
-            notify({proposal:pending});return {pending}
+            return submitted('projects',pending,false,parentName)
           }:undefined,
           propose:allowEdits?(id,block,after)=>{
             requireAccess()
@@ -462,22 +634,27 @@ export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof revie
             documents.checkProposalBlock(target,block,before)
             if(after===before)reject(400,'The edit makes no change')
             const result=db.prepare('INSERT INTO chat_edits(message,page,title,block,before,after) VALUES(?,?,?,?,?,?)').run(message,id,target.title,block,before,after)
-            notify({proposal:Number(result.lastInsertRowid)})
-            return {pending:Number(result.lastInsertRowid)}
+            return submitted('edits',Number(result.lastInsertRowid),!block)
           }:undefined,
-        },publish(delta){
+        },activity(event){requireAccess();recordActivity(event,answerLength)},publish(delta){
           requireAccess()
           db.prepare('UPDATE chat_messages SET text=text||? WHERE id=?').run(delta,message)
-          notify({message,delta})
+          notify({message,delta,offset:answerLength})
+          answerLength+=delta.length
         }})
         requireAccess()
         db.prepare("UPDATE chat_messages SET status='complete' WHERE id=?").run(message)
-      }catch{
+      }catch(error){
         const status=signal.reason==='cancelled'?'cancelled':signal.aborted?'interrupted':'failed'
         db.prepare("UPDATE chat_messages SET status=? WHERE id=? AND status='running'").run(status,message)
-        if(signal.reason!=='deleted')notify({error:status==='failed'?(config.agent?'Local '+config.agent+' request failed. Check the CLI version, login and connection.':'Provider request failed. Verify the host API key, model, network and quota.'):'Turn interrupted'})
+        const failure=error instanceof HermesSetupError?error.message:config.agent
+          ?'Local '+config.agent+' request failed. Check the CLI version, login and connection.'
+          :'Provider request failed. Verify the host API key, model, network and quota.'
+        if(signal.reason!=='deleted')notifySender({error:status==='failed'?failure:'Turn interrupted'})
       }finally{
         controller.abort();runs.delete(chat)
+        for(const reader of observers.keys())reader.end()
+        observers.clear()
         res.off('close',close);if(!background&&!res.destroyed)res.end()
       }
     }
@@ -486,7 +663,10 @@ export function workspaceAgent(db:DatabaseSync,documents:ReturnType<typeof revie
     return [...runs.values()].some(run=>run.workspace===workspace)
   },recheckAccess(){
     // A provider can wait silently between tools. Interrupt as soon as its initiating session loses access.
-    for(const {controller,canRun} of runs.values())if(!canRun())controller.abort()
+    for(const {controller,canRun,observers} of runs.values()){
+      if(!canRun())controller.abort()
+      for(const [reader,canRead] of observers)if(!canRead()){observers.delete(reader);reader.end()}
+    }
   },async stop(){
     stopped=true
     for(const {controller} of runs.values())controller.abort()

@@ -1,6 +1,7 @@
 /** Cache previously opened server workspaces in their Electron origin partition. A named profile can reopen cached reads after session expiry. Membership denials invalidate them. */
-import {attachmentDisposition} from '../shared/attachment-filename'
-import {workspaceDay,workspaceReplica,type Library,type WorkspaceCatalog} from '../shared/library'
+import * as Y from 'yjs'
+import {attachmentDisposition,attachmentFilename} from '../shared/attachment-filename'
+import {workspaceDay,workspaceReplica,type Item,type Library,type WorkspaceCatalog} from '../shared/library'
 export const desktopServer=navigator.userAgent.includes('Electron/')&&!window.chulaneServers
 const activeKey='chulane-active-replica'
 const generationKey='chulane-replica-login'
@@ -66,7 +67,30 @@ async function availableItems<T extends {id:number}>(items:T[],cache:Cache,path:
   return items.map(item=>({...item,availableOffline:stored.has(path(item.id).href)}))
 }
 
+/** Recover files saved before a list refresh. Keep manifest metadata for files that still need downloading. */
+export async function cachedPageFiles(cache:Cache,url:URL,keys:readonly Request[]){
+  const manifest=await cache.match(url)
+  const listed:(Item & {size?:number})[]=manifest?await manifest.json():[]
+  const files=new Map(listed.map(file=>[file.id,{...file,availableOffline:false}]))
+  const prefix=url.pathname+'/'
+  for(const key of keys){
+    const body=new URL(key.url)
+    if(body.origin!==url.origin||body.search!==url.search||!body.pathname.startsWith(prefix))continue
+    const tail=body.pathname.slice(prefix.length)
+    if(!/^[1-9]\d*$/.test(tail))continue
+    const id=Number(tail),listedFile=files.get(id)
+    if(listedFile){listedFile.availableOffline=true;continue}
+    const response=await cache.match(key)
+    if(!response)continue
+    const name=attachmentFilename(response)
+    if(!name)continue
+    const length=response.headers.get('Content-Length')
+    files.set(id,{id,name,availableOffline:true,...(length!==null&&{size:Number(length)})})
+  }
+  return [...files.values()].sort((a,b)=>a.id-b.id)
+}
 
+/** Annotate the current server list with availability on this device. */
 function attachmentAvailability(response:Response,cache:Cache,url:URL){
   return response.json().then(async files=>Response.json(await availableItems(files,cache,id=>{
     const key=new URL(url);key.pathname+='/'+id;return key
@@ -119,7 +143,7 @@ export async function serverRequest(path:string,init?:RequestInit):Promise<Respo
   const method=init?.method??'GET'
   const state=/^\/api\/pages\/\d+\/state$/.test(url.pathname)
   const files=/^\/api\/pages\/\d+\/files(?:\/(\d+))?$/.exec(url.pathname)
-  const fileList=!!files&&!files[1],upload=fileList&&method==='POST'&&init?.body instanceof Blob
+  const fileList=!!files&&!files[1],upload=fileList&&(method==='POST'||method==='PUT')&&init?.body instanceof Blob
   const catalog=url.pathname==='/api/workspaces',library=url.pathname==='/api/library'
   const generation=localStorage.getItem(generationKey),active=localStorage.getItem(activeKey)
   const membership=localStorage.getItem(membershipKey(active))
@@ -141,6 +165,11 @@ export async function serverRequest(path:string,init?:RequestInit):Promise<Respo
     const expected=new Headers(init?.headers).get('X-Chulane-Replica')
     const ws=Number(url.searchParams.get('workspace'))
     if((state||files)&&expected!==cachedReplica(active,ws,membership))throw err
+    if(fileList&&expected)return withWorkspaceCache(active,ws,expected,async(cache,library,keys)=>{
+      if(!library.pages.some(page=>page.id===Number(url.pathname.split('/')[3])&&!page.deleted))
+        return Response.json({error:'Page unavailable.'},{status:410})
+      return Response.json(await cachedPageFiles(cache,url,keys))
+    })
     const cache=await caches.open(cachePrefix+active),cached=await cache.match(cacheKey(url))
     if(!catalog&&membership&&!JSON.parse(membership).includes(Number(url.searchParams.get('workspace'))))throw err
     if(localStorage.getItem(activeKey)!==active||localStorage.getItem(generationKey)!==generation||membership!==localStorage.getItem(membershipKey(active)))throw err
@@ -150,10 +179,8 @@ export async function serverRequest(path:string,init?:RequestInit):Promise<Respo
       if(saved?.headers.get('X-Chulane-Unavailable-Pages')?.split(',').includes(id))
         return Response.json({error:'Page unavailable.'},{status:410})
     }
-    if(!cached&&fileList)return Response.json([])
     if(!cached&&files)throw Error('Download this attachment while online to keep it on this device.')
     if(!cached){if(state)throw Error('Open this document online once to use it offline');throw err}
-    if(fileList)return attachmentAvailability(cached,cache,url)
     const headers=new Headers(cached.headers);headers.set('X-Chulane-Offline','1')
     if(library){
       const directoryResponse=await cache.match(directory)
@@ -188,7 +215,7 @@ export async function serverRequest(path:string,init?:RequestInit):Promise<Respo
   const key=cacheKey(url)
   if(!upload&&!readable&&!(state&&method==='PUT'&&!url.searchParams.has('live')))return response
   if(response.status===204)return response
-  let cachedFile=false
+  let cachedFile=false,needsFullState=false
   await navigator.locks.request(cachePrefix+profile,async()=>{
     if(localStorage.getItem(activeKey)!==profile)return
     const current=localStorage.getItem(membershipKey(profile))
@@ -286,14 +313,27 @@ export async function serverRequest(path:string,init?:RequestInit):Promise<Respo
       const page=Number(url.pathname.split('/')[3])
       if(saved?.headers.get('X-Chulane-Removed-Pages')?.split(',').includes(String(page)))return
       if(method==='GET'){
-        await cache.put(key,response.clone())
+        const base=state && response.headers.get('X-Yjs-Delta-From')
+        if(base){
+          const previous=await cache.match(key)
+          if(previous?.headers.get('X-Revision')!==base){
+            needsFullState=true
+            return
+          }
+          // Offline opens always need a standalone state, even when this poll transferred only a delta.
+          const parts=await Promise.all([previous.arrayBuffer(),response.clone().arrayBuffer()])
+          const snapshot=Y.mergeUpdates(parts.map(part=>new Uint8Array(part)))
+          const headers=new Headers(response.headers)
+          headers.delete('X-Yjs-Delta-From');headers.delete('Content-Length')
+          await cache.put(key,new Response(snapshot as BodyInit,{headers}))
+        }else await cache.put(key,response.clone())
         cachedFile=!!files?.[1]
       }
       else if(upload&&init?.body instanceof Blob){
         const {id}=await response.clone().json()
         if(Number.isSafeInteger(id)&&id>0){
           const target=new URL(url);target.pathname+='/'+id;target.searchParams.delete('name')
-          await cache.put(target,new Response(init.body,{headers:{'Content-Type':'application/octet-stream','Content-Disposition':attachmentDisposition(url.searchParams.get('name')??'Attachment')}}))
+          await cache.put(target,new Response(init.body,{headers:{'Content-Type':'application/octet-stream','Content-Length':String(init.body.size),'Content-Disposition':attachmentDisposition(url.searchParams.get('name')??'Attachment')}}))
         }
       }else if(init?.body instanceof Blob){
         const {rev}=await response.clone().json()
@@ -305,6 +345,12 @@ export async function serverRequest(path:string,init?:RequestInit):Promise<Respo
     // The server has already accepted the upload or returned the bytes. A full disk must not invite a duplicate upload.
     if(!files||!response.ok||!(error instanceof DOMException)||error.name!=='QuotaExceededError')throw error
   })
+  if(needsFullState){
+    // Another window may have replaced the cached base while the poll was in flight.
+    url.searchParams.delete('since')
+    const headers=new Headers(init?.headers);headers.set('X-Yjs-State-Vector','')
+    return serverRequest(url.pathname.slice('/api/'.length)+url.search,{...init,headers})
+  }
   if(files&&response.ok){
     const allowed=localStorage.getItem(membershipKey(profile))
     if(localStorage.getItem(activeKey)!==profile||(allowed&&!JSON.parse(allowed).includes(Number(url.searchParams.get('workspace')))))

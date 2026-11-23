@@ -17,6 +17,8 @@ export function proposalHistory(db:DatabaseSync){
     }
     if(!db.prepare('PRAGMA table_info(proposal_decisions)').all().some(column=>column.name==='reviewer'))
       db.exec('ALTER TABLE proposal_decisions ADD COLUMN reviewer INTEGER REFERENCES accounts(id)')
+    if(!db.prepare('PRAGMA table_info(proposal_decisions)').all().some(column=>column.name==='titleAtApproval'))
+      db.exec('ALTER TABLE proposal_decisions ADD COLUMN titleAtApproval TEXT')
     db.exec('COMMIT')
   }catch(error){db.exec('ROLLBACK');throw error}
 
@@ -24,15 +26,16 @@ export function proposalHistory(db:DatabaseSync){
   function resolve(id:number,page:number|null,status:'approve'|'dismiss',kind:DecisionKind,block:string|null,reviewer:number|null=null){
     const saved=db.prepare("UPDATE proposals SET page=?,status=? WHERE id=? AND status='pending'").run(page,status,id)
     if(!saved.changes)throw Object.assign(Error('Request already resolved'),{status:409})
-    db.prepare('INSERT INTO proposal_decisions(proposal,kind,block,decidedAt,reviewer) VALUES(?,?,?,?,?)')
-      .run(id,kind,block,new Date().toISOString(),reviewer)
+    const titleAtApproval=page!==null&&kind!=='create'&&status==='approve'?db.prepare('SELECT title FROM pages WHERE id=?').get(page)!.title:null
+    db.prepare('INSERT INTO proposal_decisions(proposal,kind,block,decidedAt,reviewer,titleAtApproval) VALUES(?,?,?,?,?,?)')
+      .run(id,kind,block,new Date().toISOString(),reviewer,titleAtApproval)
   }
   /** Keyset pagination keeps older decisions reachable when another editor resolves a request between reads. */
   function list(ws:number,before:string|null){
     if(before!==null&&(!/^\d+$/.test(before)||!Number.isSafeInteger(Number(before))||Number(before)<1))
       throw Object.assign(Error('Invalid history cursor'),{status:400})
     const limit=20
-    const rows=db.prepare(`SELECT d.sequence,d.kind,d.block,d.decidedAt,p.id,p.title,p.status,p.profile,(SELECT name FROM accounts WHERE id=p.requester) AS requestedBy,(SELECT name FROM accounts WHERE id=d.reviewer) AS reviewedBy,p.page,p.edit,p.draft
+    const rows=db.prepare(`SELECT d.sequence,d.kind,d.block,d.decidedAt,d.titleAtApproval,p.id,p.title,p.status,p.profile,(SELECT name FROM accounts WHERE id=p.requester) AS requestedBy,(SELECT name FROM accounts WHERE id=d.reviewer) AS reviewedBy,p.page,p.edit,p.draft
       FROM proposal_decisions d JOIN proposals p ON p.id=d.proposal WHERE p.workspace=? AND d.sequence<?
       ORDER BY d.sequence DESC LIMIT ?`).all(ws,before===null?Number.MAX_SAFE_INTEGER:Number(before),limit+1)
     const items=rows.slice(0,limit).map(row=>({...row,draft:row.draft?JSON.parse(String(row.draft)):null,edit:row.edit?JSON.parse(String(row.edit)):null}))
@@ -40,7 +43,7 @@ export function proposalHistory(db:DatabaseSync){
   }
   /** Return an existing request's outcome without retrying it; pending requests have no decision record yet. */
   function status(ws:number,id:number){
-    const row=db.prepare(`SELECT p.id,p.status,p.page,p.title,p.profile,(SELECT name FROM accounts WHERE id=p.requester) AS requestedBy,(SELECT name FROM accounts WHERE id=d.reviewer) AS reviewedBy,d.block,d.decidedAt FROM proposals p
+    const row=db.prepare(`SELECT p.id,p.status,p.page,p.title,p.profile,(SELECT name FROM accounts WHERE id=p.requester) AS requestedBy,(SELECT name FROM accounts WHERE id=d.reviewer) AS reviewedBy,d.block,d.decidedAt,d.titleAtApproval FROM proposals p
       LEFT JOIN proposal_decisions d ON d.proposal=p.id WHERE p.id=? AND p.workspace=?`).get(id,ws)
     if(!row)throw Object.assign(Error('Request unavailable'),{status:404})
     return {...row,status:row.status==='approve'?'approved':row.status==='dismiss'?'dismissed':row.status}

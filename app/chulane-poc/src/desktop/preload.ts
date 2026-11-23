@@ -1,4 +1,5 @@
 /** Expose the server picker and device appearance settings to the local workspace's isolated renderer. */
+import './agent-link-preload'
 import {contextBridge,ipcRenderer} from 'electron'
 import type {ServerProfiles} from '../shared/server-profiles'
 const profiles:ServerProfiles={
@@ -12,6 +13,11 @@ contextBridge.exposeInMainWorld('chulaneAppearance',{
   read:()=>ipcRenderer.invoke('appearance:read'),
   save:(value)=>ipcRenderer.invoke('appearance:save',value)
 } satisfies import('../shared/theme').DesktopAppearance)
+
+contextBridge.exposeInMainWorld('chulaneSidebarWidths',{
+  read:()=>ipcRenderer.invoke('sidebar-widths:read'),
+  save:(side,width)=>ipcRenderer.invoke('sidebar-widths:save',side,width)
+} satisfies import('../shared/sidebar-widths').DesktopSidebarWidths)
 
 // Keep Electron's IPC event and sender out of plugin callbacks.
 contextBridge.exposeInMainWorld('chulanePluginBlocks',{subscribe(listener:(modules:string[])=>void){

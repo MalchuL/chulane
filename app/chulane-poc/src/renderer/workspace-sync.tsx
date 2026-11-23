@@ -1,13 +1,13 @@
 /** Coordinate automatic and user-requested document replay and expose its state in the workspace toolbar. */
 import {useEffect,useRef,useState} from 'react'
-import {RefreshCw,X} from 'lucide-react'
-import {Toast} from 'radix-ui'
+import {RefreshCw} from 'lucide-react'
+import {WorkspaceToast} from './ui/workspace-toast'
 import type {Library} from '../shared/library'
 import {json} from './api'
 import {localJournalDay,projectRenameKey,pendingSources,replayClosedDocuments,replayMetadata} from './document-outbox'
 import {Button} from './ui'
 
-type SyncProps={lib:Library;workspace:number;page?:number;mounted:(id:number)=>boolean;checkpoint:()=>Promise<void>}
+type SyncProps={closedViews:number;lib:Library;workspace:number;page?:number;mounted:(id:number)=>boolean;checkpoint:()=>Promise<void>}
 
 /** Share one cancellable run and backoff timer between manual retry, reconnection and ordinary navigation. */
 export function WorkspaceSync(props:SyncProps){
@@ -75,14 +75,11 @@ export function WorkspaceSync(props:SyncProps){
     setBusy(false)
     if(!lib.offline)void run(false)
     return ()=>{controller.abort();clearTimeout(timer)}
-  },[workspace,page,replica,lib.offline,lib.pendingRename])
+  },[workspace,page,props.closedViews,replica,lib.offline,lib.pendingMetadataRevision])
   const status=busy?'Syncing…':fault?'Sync error':pending===undefined?'Checking edits…':pending?pending+' '+(pending===1?'item':'items')+' pending':lib.offline?'Offline':'No queued edits'
   return <div data-part="workspace-sync">
     <span role="status" aria-label="Workspace sync status" title={fault||status}>{status}</span>
     <Button size="icon-sm" variant="ghost" disabled={busy} title="Retry workspace sync" aria-label="Retry workspace sync" onClick={()=>start.current(true)}><RefreshCw/></Button>
-    <Toast.Provider swipeDirection="right"><Toast.Root open={toast} onOpenChange={setToast} data-part="sync-toast">
-      <Toast.Title>Document sync failed</Toast.Title><Toast.Description>{fault}</Toast.Description>
-      <Toast.Close asChild><Button size="icon-sm" variant="ghost" aria-label="Dismiss sync notification" title="Dismiss"><X/></Button></Toast.Close>
-    </Toast.Root><Toast.Viewport data-part="sync-notifications"/></Toast.Provider>
+    {toast&&<WorkspaceToast key={fault} title="Document sync failed" message={fault} background dismiss={()=>setToast(false)}/>}
   </div>
 }

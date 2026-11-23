@@ -1,7 +1,12 @@
 /** Bind one Mastra turn to Chulane operations scoped by the authenticated host. */
+import {propertyInstructions,propertyQuery} from '../shared/tag-fields.ts'
+import {canvasRead,canvasEdit,canvasInstructions} from '../shared/agent-canvas.ts'
+import {modeDescriptions} from '../shared/agent.ts'
+import {pageLinksInstructions,pageLinksQuery} from '../shared/page-links.ts'
+import {projectLookup,projectLookupInstructions} from '../shared/project-lookup.ts'
 import {textRange,textRangeInstructions} from '../shared/text-range.ts'
 import {attachmentQuery,attachmentInstructions} from '../shared/attachment-read.ts'
-import {pageCreation} from '../shared/page-draft.ts'
+import {journalListInstructions,journalListQuery,journalDayInstructions,journalReadQuery,pageCreation} from '../shared/page-draft.ts'
 import type {AgentTurn} from './agent-environment.ts'
 import { z } from 'zod'
 import {LOCAL_AGENTS,type LocalAgent} from '../shared/agent.ts'
@@ -16,45 +21,55 @@ export function environmentProvider():ProviderSettings {
 }
 export const pluginDraft=z.object({name:z.string().trim().min(1).max(100),nativeModule:z.string().min(1).max(32000),rendererModule:z.string().min(1).max(32000).nullable()})
 export const historyQuery=z.object({before:z.number().int().positive().nullable()})
-export const reviewInstructions='Use listReviews to check the recorded status and target IDs of edits, page proposals and project proposals in this chat. Start with before null and follow nextBefore for older reviews. Read the current target for its contents.'
-export const linkedMessagesInstructions='Use listLinkedMessages to find pages and blocks the user attached or an earlier answer cited in this chat, including cited files. The role identifies who supplied the links. Start with before null and use nextBefore for older messages. Read the identified page, block or attachment for its current contents.'
+export const reviewInstructions='Use listReviews to check the recorded status and target IDs of edits, page proposals and project proposals in this chat. Start with before null and follow nextBefore for older reviews. For paragraph edits, an empty requestedBlock means append, a block ID means replace, and null means the original action was not recorded. The block field identifies the resulting block after approval. Read the current target for its contents.'
+export const agentTextRange=textRange.extend({field:textRange.shape.field.default(null),message:z.number().int().positive().nullable().default(null)})
+export const citationInstructions='For a previously cited readFrom, pass the containing message ID as message so the host can find the passage after edits. For a new read or a continuation use message null.'
+export const linkedMessagesInstructions='Use listLinkedMessages to find pages and blocks the user attached or an earlier answer cited in this chat, including cited files. The role identifies who supplied the links. Start with before null and use nextBefore for older messages. For links with readFrom, use readText with its block, offset and field to revisit the cited passage. Pass the containing message ID as message. Search again if the passage has changed or is ambiguous. Read the identified source for its current contents.'
 export const draftLookup=z.object({message:z.number().int().positive().nullable()})
 export const draftLookupInstructions='Read the original source of a saved plugin draft before explaining or revising it. Use message null for the latest draft in this conversation, or its saved message ID for an earlier version.'
 export const pluginInstructions='Draft a desktop plugin for user review. nativeModule is complete self-contained ES module source for plugin.mjs, exporting default function(ctx,{command}); use ctx.effect(()=>command(label,callback)) for menu commands. rendererModule is null or source for renderer.mjs exporting default function({React,MarkdownContent,BLOCK_TEXT_METADATA_KEY}) returning [{definition:{type,title,metadata:{[BLOCK_TEXT_METADATA_KEY]:true}},slashCommand:{title,group},render:props=>React.createElement(MarkdownContent,props)}]. Use a stable namespaced block type. The user chooses whether to save and run it.'
-export const projectQuery=z.object({project:z.number().int().positive().nullable(),offset:z.number().int().nonnegative()})
+export const projectQuery=z.object({project:z.number().int().positive().nullable(),offset:z.number().int().nonnegative(),name:z.string().min(1).max(250).nullable().default(null)})
 export const openPageInput=z.object({id:z.number().int().positive(),block:textRange.shape.block.default(null),surface:z.literal('canvas').nullable().default(null)})
 export const openPageInstructions='When the user asks to open or show a page in their editor, use openPage with its workspace page ID. To show a specific passage, pass its block ID from a source link or search result. For a canvas citation, pass surface "canvas" and block null. For a writing block or a plain page link, leave surface null. The tool opens the target in the user’s window and returns its current text. For research alone use the read tools.'
 export const pageRename=z.object({id:z.number().int().positive(),title:z.string().max(250).trim().min(1)})
 export const projectRename=z.object({id:z.number().int().positive(),name:z.string().trim().min(1).max(250)})
-export const projectRenameInstructions='Use proposeProjectRename to rename a project by ID after browsing its parent folder. The user reviews the original and proposed names.'
+export const projectRenameInstructions='Use proposeProjectRename to rename a project by ID after browsing its parent folder.'
 export const projectCreation=z.object({name:z.string().trim().min(1).max(250),parent:z.number().int().positive().nullable()})
 /** Stream a bounded model/tool loop; Chulane owns and persists tool results and authorization. */
-export async function runAgent({settings,history,current,tools:operations,signal,publish,referencedDocuments,referencedBlocks}:AgentTurn){
+export async function runAgent({mode,settings,history,workspaceCalendar,current,tools:operations,signal,publish,activity,referencedDocuments,referencedBlocks}:AgentTurn){
   if(settings.agent){
     const {runLocalAgent}=await import('./local-agent.ts')
-    return runLocalAgent(settings.agent,{history,currentDocument:current,referencedDocuments,referencedBlocks},operations,signal,publish)
+    return runLocalAgent(settings.agent,{history,workspaceCalendar,currentDocument:current,referencedDocuments,referencedBlocks},operations,signal,publish,activity,mode)
   }
   const [{Agent},{createTool}]=await Promise.all([import('@mastra/core/agent'),import('@mastra/core/tools')])
   const proposeRename=operations.proposeRename
   const proposeProject=operations.proposeProject
   const propose=operations.propose
-  const editInstructions=propose?'Propose each requested block change using proposeEdit. The user reviews each proposal before applying it.':'This is a read-only turn. Give suggestions in your reply.'
+  const editInstructions=modeDescriptions[mode??(propose?'suggest':'ask')]+' Use proposeEdit for writing blocks. '+canvasInstructions+' Report the returned applied or pending status.'
+  const responses=settings.model.toLowerCase().includes('codex')
   const agent=new Agent({
     id:'chulane-writer',name:'Workspace agent',
-    model:{providerId:"openai",modelId:settings.model,apiKey:settings.key,url:settings.url || 'https://api.openai.com/v1',api:settings.model.toLowerCase().includes('codex')?'responses':'chat'},
+    model:{providerId:"openai",modelId:settings.model,apiKey:settings.key,url:settings.url || 'https://api.openai.com/v1',api:responses?'responses':'chat'},
     instructions:'Help the user write and organize their Chulane pages. Treat page texts as source material. When referencedBlocks are provided, focus on those blocks. Read other pages only when needed. Use searchPages and readPage for sources. Answer in the user’s language. '+editInstructions,
     tools:{
       ...(operations.readPluginDraft?{readPluginDraft:createTool({id:'readPluginDraft',description:draftLookupInstructions,inputSchema:draftLookup,execute:async({message})=>operations.readPluginDraft!(message)})}:{}),
       ...(operations.draftPlugin?{draftPlugin:createTool({id:'draftPlugin',description:pluginInstructions,inputSchema:pluginDraft,execute:async draft=>operations.draftPlugin!(draft)})}:{}),
       ...(operations.openPage?{openPage:createTool({id:'openPage',description:openPageInstructions,inputSchema:openPageInput,execute:async({id,block,surface})=>operations.openPage!(id,block,surface)})}:{}),
+      ...(operations.readCanvas?{readCanvas:createTool({id:'readCanvas',description:'Read a batch of canvas elements with IDs, frame coordinates, labels and block-card ranges.',inputSchema:canvasRead,execute:async({id,offset})=>operations.readCanvas!(id,offset)})}:{}),
+      ...(operations.editCanvas?{editCanvas:createTool({id:'editCanvas',description:canvasInstructions,inputSchema:canvasEdit,execute:async input=>operations.editCanvas!(input)})}:{}),
       listReviews:createTool({id:'listReviews',description:reviewInstructions,inputSchema:historyQuery,execute:async({before})=>operations.listReviews(before)}),
       listLinkedMessages:createTool({id:'listLinkedMessages',description:linkedMessagesInstructions,inputSchema:historyQuery,execute:async({before})=>operations.listLinkedMessages(before)}),
-      browseProject:createTool({id:'browseProject',description:'List immediate subprojects and pages. Start with project null for the workspace root and offset 0. Use nextOffset for more entries. Read pages by ID for content and citations.',inputSchema:projectQuery,execute:async({project,offset})=>operations.browse(project,offset)}),
-      searchPages:createTool({id:'searchPages',description:'Find active pages by title, writing text, canvas labels or extracted attachment text. One page can have several matching block IDs or files. Use the block ID to read a particular passage.',inputSchema:z.object({query:z.string().max(4096)}),execute:({query})=>operations.search(query)}),
+      findProjects:createTool({id:'findProjects',description:projectLookupInstructions,inputSchema:projectLookup,execute:async({name,offset,match})=>operations.findProjects(name,offset,match)}),
+      browseProject:createTool({id:'browseProject',description:'List immediate subprojects and pages. Start with project null for the workspace root and offset 0. Pass the exact name to find matching entries in this folder, or null to list all. Keep the same name when continuing with nextOffset. Read pages by ID for content and citations.',inputSchema:projectQuery,execute:async({project,offset,name})=>operations.browse(project,offset,name)}),
+      searchPages:createTool({id:'searchPages',description:'Find active pages by title, writing text, canvas labels, attachment filenames or extracted text. Use #Name for exact tag assignments on pages or blocks; use tag:#123 for a numeric tag. One page can have several matching block IDs or files. Use the block ID to read a particular passage.',inputSchema:z.object({query:z.string().max(4096)}),execute:({query})=>operations.search(query)}),
       readAttachment:createTool({id:'readAttachment',description:attachmentInstructions,inputSchema:attachmentQuery,execute:async({id,file,offset})=>operations.readAttachment(id,file,offset)}),
-      readText:createTool({id:'readText',description:textRangeInstructions,inputSchema:textRange,execute:async({id,block,offset})=>operations.readText(id,block,offset)}),
+      readText:createTool({id:'readText',description:textRangeInstructions+' '+citationInstructions,inputSchema:agentTextRange,execute:async({id,block,offset,message,field})=>operations.readText(id,block,offset,message,field)}),
+      readProperties:createTool({id:'readProperties',description:propertyInstructions,inputSchema:propertyQuery,execute:async input=>operations.readProperties(input)}),
+      listPageLinks:createTool({id:'listPageLinks',description:pageLinksInstructions,inputSchema:pageLinksQuery,execute:async({id,after,direction})=>operations.listPageLinks(id,after,direction)}),
+      listJournal:createTool({id:'listJournal',description:journalListInstructions,inputSchema:journalListQuery,execute:async({before})=>operations.listJournal(before)}),
+      readJournalDay:createTool({id:'readJournalDay',description:journalDayInstructions,inputSchema:journalReadQuery,execute:async({day})=>operations.readJournalDay(day)}),
       readBlock:createTool({id:'readBlock',description:'Read the current text of one cited block using its page and block IDs.',inputSchema:z.object({id:z.number().int().positive(),block:z.string().min(1).max(1024)}),execute:async({id,block})=>operations.read(id,block)}),
-      readPage:createTool({id:'readPage',description:'Read identified writing blocks and a read-only canvas text excerpt on the first page. Start at offset 0 and advance by the returned block count for more.',inputSchema:z.object({id:z.number().int().positive(),offset:z.number().int().nonnegative()}),execute:async({id,offset})=>operations.read(id,offset)}),
+      readPage:createTool({id:'readPage',description:'Read identified writing blocks and a canvas text excerpt on the first page. Start at offset 0 and follow nextBlockOffset until it is null.',inputSchema:z.object({id:z.number().int().positive(),offset:z.number().int().nonnegative()}),execute:async({id,offset})=>operations.read(id,offset)}),
       ...(operations.proposePage?{proposePage:createTool({id:'proposePage',description:'Draft a new page for approval. Supply the title, destination project ID (null for workspace root) and full Markdown content.',inputSchema:pageCreation,execute:async({title,project,markdown})=>operations.proposePage!(title,project,markdown)})}:{}),
       ...(proposeRename?{proposeRename:createTool({id:'proposeRename',description:'Propose a new title for a page you have read. The user reviews the old and new title.',inputSchema:pageRename,execute:async({id,title})=>proposeRename(id,title)})}:{}),
       ...(operations.proposeProjectRename?{proposeProjectRename:createTool({id:'proposeProjectRename',description:projectRenameInstructions,inputSchema:projectRename,execute:async({id,name})=>operations.proposeProjectRename!(id,name)})}:{}),
@@ -62,11 +77,22 @@ export async function runAgent({settings,history,current,tools:operations,signal
       ...(propose?{proposeEdit:createTool({id:'proposeEdit',description:'Propose replacement of one previously read block, or append a paragraph with an empty block ID. Text is the complete new block content.',inputSchema:z.object({id:z.number().int().positive(),block:z.string(),text:z.string().max(32000)}),execute:async({id,block,text})=>propose(id,block,text)})}:{}),
     },
   })
-  const stream=await agent.stream([...history.slice(0,-1).map(m=>m.role==='user'?{role:'user' as const,content:m.content}:{role:'assistant' as const,content:m.content}),{role:'user' as const,content:JSON.stringify({message:history.at(-1)!.content,currentDocument:current,referencedDocuments,referencedBlocks})}],{abortSignal:signal,maxSteps:8})
+  const stream=await agent.stream([...history.slice(0,-1).map(m=>m.role==='user'?{role:'user' as const,content:m.content}:{role:'assistant' as const,content:m.content}),{role:'user' as const,content:JSON.stringify({message:history.at(-1)!.content,workspaceCalendar,currentDocument:current,referencedDocuments,referencedBlocks})}],{abortSignal:signal,maxSteps:8,...(responses&&{providerOptions:{openai:{reasoningSummary:'auto'}}})})
   for await(const event of stream.fullStream){
     signal.throwIfAborted()
     if(event.type==='error')throw new Error('Provider request failed')
     if(event.type==='text-delta')publish(event.payload.text)
+    if(event.type==='reasoning-delta')activity?.({type:'reasoning',key:event.payload.id,text:event.payload.text})
+    if(event.type==='reasoning-end')activity?.({type:'reasoning-end',key:event.payload.id})
+    if(event.type==='tool-call'){
+      const {toolCallId:key,toolName:name,args}=event.payload
+      activity?.({type:'tool-start',key,name,input:args})
+    }
+    if(event.type==='tool-result'&&!event.payload.preliminary){
+      const {toolCallId:key,result,isError}=event.payload
+      activity?.({type:'tool-end',key,result,failed:isError})
+    }
+    if(event.type==='tool-error'||event.type==='tool-output-denied')activity?.({type:'tool-end',key:event.payload.toolCallId,failed:true})
   }
   if(stream.error)throw stream.error
 }

@@ -1,10 +1,12 @@
 /** Inspect completed external tool reviews without reissuing them. Stable result links open the affected page or block. */
+import {Disclosure} from './ui/disclosure'
 import {useEffect,useState} from 'react'
 import {History} from 'lucide-react'
 import type {ToolProposal,DecisionKind,DecisionPage,ProposalDecision} from '../shared/library'
 import type {Source} from '../shared/agent'
 import {json} from './api'
-import {Button,Dialog,DialogContent,DialogTitle,DialogTrigger} from './ui'
+import {Button,Popover,PopoverContent,PopoverTrigger} from './ui'
+import {ScrollArea} from './ui/scroll-area'
 
 const actions:Record<DecisionKind,string>={create:'Create page',rename:'Rename page',append:'Append paragraph',replace:'Edit block',page:'Page change'}
 type HistoryProps={ws:number;openSource:(source:Source)=>void}
@@ -16,8 +18,9 @@ export function ReviewDestination({id,original,shown}:{id:number|null;original:s
 }
 
 /** Show the submitted destination and literal Markdown before and after the decision. */
-export function DraftPreview({draft,shown=draft.reviewedPath??draft.projectName}:{draft:NonNullable<ToolProposal['draft']>;shown?:string|null}){
-  return <div data-part="proposal-text"><div><small>Destination</small><p><ReviewDestination id={draft.project} original={draft.projectName} shown={shown}/></p></div>
+export function DraftPreview({draft,shown}:{draft:NonNullable<ToolProposal['draft']>;shown?:string|null}){
+  if('day' in draft)return <div data-part="proposal-text"><small>Journal date</small><p><time dateTime={draft.day}>{draft.day}</time></p><small>Writing</small><p>{draft.content||'(empty entry)'}</p></div>
+  return <div data-part="proposal-text"><div><small>Destination</small><p><ReviewDestination id={draft.project} original={draft.projectName} shown={shown===undefined?draft.reviewedPath??draft.projectName:shown}/></p></div>
     <div><small>Markdown</small><p>{draft.markdown||'(empty page)'}</p></div></div>
 }
 
@@ -33,28 +36,29 @@ function Decisions({ws,openSource}:HistoryProps){
     }).catch(err=>{if(active)setError(err.message)}).finally(()=>{if(active)setLoading(false)})
     return ()=>{active=false}
   },[ws,before,retry])
-  return <div data-part="decision-list"><ol>{items.map(item=><li key={item.id}>
-    <header><strong>{actions[item.kind]}</strong><span>{item.status==='approve'?'Approved':'Dismissed'}{item.reviewedBy&&' by '+item.reviewedBy}</span></header>
+  return <ScrollArea className="decision-scroll" data-part="decision-list" aria-label="Completed tool requests"><ol>{items.map(item=><li key={item.id}>
+    <header><strong>{item.draft&&'day' in item.draft?'Create journal entry':actions[item.kind]}</strong><span>{item.status==='approve'?'Approved':'Dismissed'}{item.reviewedBy&&' by '+item.reviewedBy}</span></header>
     {item.page!==null?<a href={'?workspace='+ws+'&page='+item.page+(item.block?'&block='+encodeURIComponent(item.block):'')}
-      onClick={e=>{if(e.ctrlKey||e.metaKey||e.shiftKey||e.altKey)return;e.preventDefault();openSource({id:item.page!,title:item.title,block:item.block??undefined})}}>
-      {item.title} · #{item.page}</a>:<span>{item.title}</span>}
+      onClick={e=>{if(e.ctrlKey||e.metaKey||e.shiftKey||e.altKey)return;e.preventDefault();openSource({id:item.page!,title:item.titleAtApproval??item.title,block:item.block??undefined})}}>
+      {item.titleAtApproval??item.title} · #{item.page}</a>:<span>{item.title}</span>}
+    {item.kind==='rename'&&item.titleAtApproval!=null&&item.titleAtApproval!==item.title&&<p>Requested “{item.title}”. Approval kept “{item.titleAtApproval}”.</p>}
     <small>Request #{item.id}{item.profile&&' · '+item.profile}{item.requestedBy&&' · Requested by '+item.requestedBy}{item.decidedAt&&<> · <time dateTime={item.decidedAt}>{new Date(item.decidedAt).toLocaleString()}</time></>}</small>
-    {item.draft&&<details><summary>Requested page</summary><DraftPreview draft={item.draft}/></details>}
-    {item.edit&&<details><summary>Requested text</summary><div data-part="proposal-text">
+    {item.draft&&<Disclosure label={'day' in item.draft?'Requested journal entry':'Requested page'}><DraftPreview draft={item.draft}/></Disclosure>}
+    {item.edit&&<Disclosure label="Requested text"><div data-part="proposal-text">
       {item.edit.block&&<div><small>Before</small><p>{item.edit.before||'(empty)'}</p></div>}
-      <div><small>After</small><p>{item.edit.after||'(empty)'}</p></div></div></details>}
+      <div><small>After</small><p>{item.edit.after||'(empty)'}</p></div></div></Disclosure>}
   </li>)}</ol>
   {loading?<small role="status">Loading decisions…</small>:error?<><p role="alert">{error}</p><Button size="sm" onClick={()=>setRetry(n=>n+1)}>Retry</Button></>
     :!items.length?<p>No completed tool requests.</p>:next!==null&&<Button size="sm" variant="ghost" onClick={()=>setBefore(next)}>Older decisions</Button>}
-  </div>
+  </ScrollArea>
 }
 
-/** Use the shared dialog trigger to retain keyboard focus on dismissal and fetch a fresh history on each opening. */
+/** Open review history beside its trigger and fetch current decisions on each opening. */
 export function ProposalHistory({ws,openSource}:HistoryProps){
   const [open,setOpen]=useState(false)
-  return <Dialog open={open} onOpenChange={setOpen}><DialogTrigger asChild>
+  return <Popover open={open} onOpenChange={setOpen}><PopoverTrigger asChild>
     <Button size="icon-sm" variant="ghost" aria-label="Tool request history" title="Tool request history"><History/></Button>
-    </DialogTrigger><DialogContent aria-describedby={undefined}><DialogTitle>Tool request history</DialogTitle>
+    </PopoverTrigger><PopoverContent align="end" data-part="decision-history" aria-label="Tool request history"><h2>Tool request history</h2>
       {open&&<Decisions key={ws} ws={ws} openSource={source=>{setOpen(false);openSource(source)}}/>}
-    </DialogContent></Dialog>
+    </PopoverContent></Popover>
 }

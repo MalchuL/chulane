@@ -2,9 +2,10 @@
 import * as React from "react"
 import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "cn"
+import {ScrollArea} from "./scroll-area"
 
 const alertVariants = cva(
-  "relative grid w-full grid-cols-[0_1fr] items-start gap-y-0.5 rounded-lg border px-4 py-3 text-sm has-[>svg]:grid-cols-[calc(var(--spacing)*4)_1fr] has-[>svg]:gap-x-3 [&>svg]:size-4 [&>svg]:translate-y-0.5 [&>svg]:text-current",
+  "relative grid w-full grid-cols-[minmax(0,1fr)] [overflow-wrap:anywhere] items-start gap-y-0.5 rounded-lg border px-4 py-3 text-sm has-[>svg]:grid-cols-[calc(var(--spacing)*4)_minmax(0,1fr)] has-[>svg]:gap-x-3 [&>svg]:size-4 [&>svg]:translate-y-0.5 [&>svg]:text-current",
   {
     variants: {
       variant: {
@@ -39,7 +40,7 @@ function AlertTitle({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="alert-title"
       className={cn(
-        "col-start-2 line-clamp-1 min-h-4 font-medium tracking-tight",
+        "col-end-[-1] line-clamp-1 min-h-4 font-medium tracking-tight",
         className
       )}
       {...props}
@@ -55,12 +56,19 @@ function AlertDescription({
     <div
       data-slot="alert-description"
       className={cn(
-        "col-start-2 grid justify-items-start gap-1 text-sm text-muted-foreground [&_p]:leading-relaxed",
+        "col-end-[-1] grid justify-items-start gap-1 text-sm text-muted-foreground [&_p]:leading-relaxed",
         className
       )}
       {...props}
     />
   )
+}
+
+/** Present a copyable request error without pushing a form's controls beyond the viewport. */
+export function ErrorAlert({id,message}:{id?:string;message:string}){
+  return <Alert id={id} variant="destructive">
+    <ScrollArea role="region" aria-label="Error details" data-part="error-details" tabIndex={0}><span>{message}</span></ScrollArea>
+  </Alert>
 }
 
 export { Alert, AlertTitle, AlertDescription }

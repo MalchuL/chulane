@@ -9,5 +9,5 @@ ditto -x -k "$archive" "$stage/Applications"
 bundle="$stage/Applications/Chulane.app"
 codesign --verify --deep --strict "$bundle"
 export CHULANE_TEST_INSTALLED_DESKTOP="$bundle/Contents/MacOS/Chulane"
-pnpm smoke desktop
+pnpm smoke:installed
 pnpm smoke:agent

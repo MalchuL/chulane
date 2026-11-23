@@ -1,0 +1,55 @@
+/** Exercise the tab chooser when the current split is too narrow to display its documents. */
+import {chromium,firefox,expect} from '@playwright/test'
+import {resolve} from 'node:path'
+import {serve} from '../../src/server/service'
+
+const host=await serve({file:':memory:',assets:resolve('dist'),editorKey:'test'})
+const browser=await (process.env.CHULANE_TEST_BROWSER==='firefox'?firefox:chromium).launch()
+try{
+  const page=await browser.newPage({viewport:{width:1280,height:800}})
+  const post=async(path:string,data:object)=>{
+    const response=await page.request.post(host.url+'/api/'+path,{data})
+    expect(response.ok()).toBe(true)
+    return response.json()
+  }
+  await post('login',{key:'test'})
+  await post('workspaces',{name:'Expedition'})
+  const titles=['Ground report','Harbour observations','Camp supplies','River survey','Coastal measurements','Weather forecast']
+  for(const title of titles)await post('pages',{title})
+  await page.goto(host.url+'/?workspace=1&page=1')
+  await expect(page.getByRole('tab',{name:titles[0]})).toBeVisible()
+  await expect(page.getByRole('button',{name:'Find open tab'})).toHaveCount(0)
+  await page.getByRole('button',{name:'Split right'}).click()
+  const rail=page.getByRole('navigation',{name:'Library',exact:true})
+  for(const title of titles.slice(1))await rail.getByRole('button',{name:title,exact:true}).click()
+  const group=page.locator('.dv-active-group')
+  const chooser=group.getByRole('button',{name:'Find open tab'})
+  await expect(chooser).toBeVisible({timeout:3000})
+  await chooser.press('Enter')
+  const popup=page.getByRole('dialog',{name:'Open tabs'})
+  const search=popup.getByRole('searchbox',{name:'Find tab'})
+  await expect(search).toBeFocused()
+  await search.fill('ground')
+  await expect(popup.getByRole('button',{name:'Ground report',exact:true})).toBeVisible()
+  await search.press('Enter')
+  const ground=group.getByRole('tab',{name:'Ground report',exact:true})
+  await expect(ground).toBeFocused()
+  await expect(ground).toHaveAttribute('aria-selected','true')
+  await expect(page).toHaveURL(/page=1(?:&|$)/)
+  await chooser.press('Enter')
+  const rename=await page.request.patch(host.url+'/api/pages/2?workspace=1',{data:{baseTitle:'Harbour observations',title:'Harbour log'}})
+  expect(rename.ok()).toBe(true)
+  await expect(popup.getByRole('button',{name:'Harbour log',exact:true})).toBeVisible({timeout:10000})
+  await search.fill('camp')
+  await popup.getByRole('button',{name:'Close Camp supplies',exact:true}).press('Enter')
+  await expect(group.getByRole('tab',{name:'Camp supplies',exact:true})).toHaveCount(0)
+  await expect(popup.getByRole('status')).toHaveText('No matching tabs')
+  await expect(search).toBeFocused()
+  await expect(ground).toHaveAttribute('aria-selected','true')
+  await expect(rail.getByRole('button',{name:'Camp supplies',exact:true})).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(chooser).toBeFocused()
+  await page.setViewportSize({width:3000,height:900})
+  await expect(chooser).toHaveCount(0)
+  console.log('Keyboard tab search, scoped selection, background close and overflow resizing passed.')
+}finally{await browser.close();await host.close()}

@@ -2,11 +2,13 @@
 import {useEffect,useState} from 'react'
 import {Download,FileDown,RefreshCw} from 'lucide-react'
 import {workspaceReplica,type Library,type WorkspaceCatalog} from '../shared/library'
-import {exportPendingDocument,exportProjectRenames,localJournalDay,pendingSources,pendingRecoveryInfo,pendingMarkdown,replayMetadata,replayClosedDocuments} from './document-outbox'
+import {exportPendingDocument,exportProjectRenames,localJournalDay,pendingSources,pendingRecoveryInfo,recoveryMarkdown,replayMetadata,replayClosedDocuments} from './document-outbox'
 import {isCurrentServerProfile} from './offline-server'
 import {downloadBlob} from './download'
 import {json} from './api'
-import {Button,Dialog,DialogContent,DialogTitle,DialogTrigger} from './ui'
+import {Button} from './ui'
+import {ScrollArea} from './ui/scroll-area'
+import {SettingsPanel} from './ui/settings-panel'
 
 /** Recheck pending IDs with each catalog refresh. Merge document snapshots only for the selected download. */
 export function PendingRecovery({catalog}:{catalog:WorkspaceCatalog}){
@@ -63,13 +65,13 @@ export function PendingRecovery({catalog}:{catalog:WorkspaceCatalog}){
     const {workspace,id,replica}=doc
     setError('');setNotice('')
     try{
-      // Another tab may have switched the session since this dialog was opened.
+      // Another tab may have switched the session since the panel opened.
       const current:WorkspaceCatalog=await json('workspaces')
       if(current.profile!==profile)throw Error('Sign in as the original account to export these edits.')
       const label=details[doc.source]?.title??'Page '+id
       let blob:Blob,filename:string
       if(markdown){
-        const result=await pendingMarkdown(replica,id)
+        const result=await recoveryMarkdown(replica,id)
         blob=new Blob([result.markdown],{type:'text/markdown'})
         filename=label+'.md'
         setNotice('Markdown exported. Workspace metadata and attached files are excluded.'+(result.omitted.length?' Omitted '+result.omitted.join(', ')+'.':''))
@@ -83,16 +85,21 @@ export function PendingRecovery({catalog}:{catalog:WorkspaceCatalog}){
   }
   const needsConsent=documents.some(doc=>!doc.blocked&&doc.delivery!==doc.replica)
   const action=needsConsent?'Review restored workspace edits':'Export unsynced edits'
-  return <Dialog open={open} onOpenChange={next=>{setOpen(next);setNotice('');setError('')}}><DialogTrigger asChild>
-    <Button size="sm" variant="ghost" title={action} aria-label={action}><Download/>{needsConsent?'Review restored edits':documents.some(doc=>doc.blocked)&&'Unsynced edits'}</Button>
-  </DialogTrigger><DialogContent aria-describedby={undefined}><DialogTitle>Unsynced edits on this device</DialogTitle>
+  return <SettingsPanel title="Unsynced edits on this device" open={open}
+    onOpenChange={next=>{setOpen(next);setNotice('');setError('')}}
+    trigger={<Button size="icon-sm" variant="ghost" title={action} aria-label={action}><Download/></Button>}>
     {documents.some(doc=>doc.blocked)&&<p>Editing access is unavailable for one or more workspaces. Your edits are saved here for export.</p>}
     {needsConsent&&<p>This workspace was restored after deletion. Choose which saved edits to sync.</p>}
-    {documents.map(doc=><div key={doc.source}><Button variant="outline" onClick={()=>void download(doc)}>
-      <Download/>{doc.name??'Workspace '+doc.workspace} · {doc.kind==='project'?'Project · ':''}{details[doc.source]?.title??doc.kind+' '+doc.id}</Button>
-      {details[doc.source]?.hasDocument&&<Button variant="ghost" size="icon-sm" title="Export as Markdown" aria-label={'Export '+(details[doc.source]?.title??'Page '+doc.id)+' as Markdown'} onClick={()=>void download(doc,true)}><FileDown/></Button>}
-      {!doc.blocked&&doc.delivery!==doc.replica&&<Button variant="ghost" size="icon-sm" disabled={syncing} aria-label={'Sync restored '+doc.kind+' '+doc.id} title={'Sync edits to restored '+doc.kind} onClick={()=>void sync(doc)}><RefreshCw/></Button>}</div>)}
+    <ScrollArea data-part="recovery-list" role="region" aria-label="Saved edits" tabIndex={0}>
+      {documents.map(doc=><div key={doc.source} data-part="recovery-row">
+        <Button variant="ghost" onClick={()=>void download(doc)}>
+          <Download/><span>{doc.name??'Workspace '+doc.workspace} · {doc.kind==='project'?'Project · ':''}{details[doc.source]?.title??doc.kind+' '+doc.id}</span>
+        </Button>
+        {details[doc.source]?.hasDocument&&<Button variant="ghost" size="icon-sm" title="Export as Markdown" aria-label={'Export '+(details[doc.source]?.title??'Page '+doc.id)+' as Markdown'} onClick={()=>void download(doc,true)}><FileDown/></Button>}
+        {!doc.blocked&&doc.delivery!==doc.replica&&<Button variant="ghost" size="icon-sm" disabled={syncing} aria-label={'Sync restored '+doc.kind+' '+doc.id} title={'Sync edits to restored '+doc.kind} onClick={()=>void sync(doc)}><RefreshCw/></Button>}
+      </div>)}
+    </ScrollArea>
     {notice&&<p role="status">{notice}</p>}
     {error&&<p role="alert">{error}</p>}
-  </DialogContent></Dialog>
+  </SettingsPanel>
 }

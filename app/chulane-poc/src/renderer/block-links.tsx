@@ -1,5 +1,5 @@
 /** Chulane contributes a reference grip to Rivto rows. The editor's structural move grip stays independent. */
-import {createContext,useContext,useRef,type RefObject} from 'react'
+import {createContext,useContext,useId,useRef,type RefObject} from 'react'
 import {PointerSensor,useDraggable} from '@dnd-kit/react'
 import {Link2} from 'lucide-react'
 import {editorControlProps,useReactPanel,type BlockSlotProps,type ReactEditorExtension} from '@chulane/rivto-react'
@@ -17,19 +17,21 @@ const HANDLE='block-link-handle'
 function BlockLinkHandle({block,page}:{block:BlockSlotProps['block'];page:Source}){
   const panel=useReactPanel()
   const composer=useContext(BlockLinkComposer)
-  const links=useRef<BlockSource[]>([])
+  const links=useRef<BlockSource[]>([]),dragged=useRef(false)
   function capture(){
     const selection=panel.selection.snapshot()?.blocks??[]
     const ids=selection.some(item=>item.id===block.id)?selection.map(item=>item.id):[block.id]
     links.current=ids.map(id=>({id:page.id,block:id,title:page.title,excerpt:textPrefix(panel.blocks.getBlockNode(id)?.content??'',60)||'Empty block'}))
   }
-  const {ref}=useDraggable({id:BLOCK_REFERENCE+page.id+'/'+block.id,type:BLOCK_REFERENCE,sensors:[PointerSensor],data:{links}})
+  const view=useId()
+  const {ref}=useDraggable({id:BLOCK_REFERENCE+view+page.id+'/'+block.id,type:BLOCK_REFERENCE,sensors:[PointerSensor],data:{links,dragged}})
   return <Button {...editorControlProps} ref={ref} className={HANDLE} type="button" size="icon-sm" variant="ghost" contentEditable={false}
-    onPointerDownCapture={capture} onClick={event=>{
-      // Native keyboard and assistive activation produce a click with zero detail.
-      if(event.detail===0){capture();composer?.current?.(links.current)}
+    onPointerDownCapture={()=>{dragged.current=false;capture()}} onClick={event=>{
+      if(event.detail===0)capture()
+      else if(dragged.current)return
+      composer?.current?.(links.current)
     }}
-    title="Drag into chat, or press Enter to attach the selected blocks" aria-label="Attach block links to chat"><Link2 size={14}/></Button>
+    title="Click to attach the selected blocks, or drag them into chat" aria-label="Attach block links to chat"><Link2 size={14}/></Button>
 }
 
 /** Mount a drag source only while the editable workspace chat is visible. */

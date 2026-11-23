@@ -2,6 +2,7 @@
 import {useEffect,useState} from 'react'
 import {ListChecks,Square} from 'lucide-react'
 import {Button,Popover,PopoverContent,PopoverTrigger} from './ui'
+import {ScrollArea} from './ui/scroll-area'
 import {json} from './api'
 
 type Task={id:number;chat:number;title:string;status:string;pending:number}
@@ -31,9 +32,9 @@ export function AgentTasks({ws,write,disabled,openResult}:TaskProps){
   </PopoverTrigger><PopoverContent data-part="agent-tasks" aria-label="Background tasks">
     <strong>Background tasks</strong>
     {error&&<small role="alert">{error}</small>}
-    {!tasks?<small>Loading…</small>:!tasks.length?<small>No background tasks yet.</small>:<ul>{tasks.map(task=><li key={task.id}>
-      <button type="button" onClick={()=>{setOpen(false);openResult(task)}}>{task.title}<small>{task.status==='unknown'?'Outcome unknown':task.status}{task.pending?' · Review requested':''}</small></button>
+    {!tasks?<small>Loading…</small>:!tasks.length?<small>No background tasks yet.</small>:<ScrollArea role="region" aria-label="Task list"><ul>{tasks.map(task=><li key={task.id}>
+      <Button variant="ghost" size="sm" type="button" onClick={()=>{setOpen(false);openResult(task)}}><span data-copyable="">{task.title}</span><small>{task.status==='unknown'?'Outcome unknown':task.status}{task.pending?' · Review requested':''}</small></Button>
       {write&&task.status==='running'&&<Button variant="ghost" size="icon-sm" aria-label={'Cancel '+task.title} title="Cancel task" onClick={()=>void cancel(task)}><Square/></Button>}
-    </li>)}</ul>}
+    </li>)}</ul></ScrollArea>}
   </PopoverContent></Popover>
 }

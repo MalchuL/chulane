@@ -1,15 +1,22 @@
-/** Measure authenticated library search and JSON delivery against a disposable, disk-backed SQLite database. */
+/** Measure authenticated search from request to JSON and optionally from browser input to the result-count DOM update. */
 import assert from 'node:assert/strict'
 import {mkdtemp,rm} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
-import {join} from 'node:path'
+import {join,resolve} from 'node:path'
 import {DatabaseSync} from 'node:sqlite'
 import {serve} from '../../src/server/service.ts'
 import type {LibrarySearchHit} from '../../src/shared/agent.ts'
 
+/** Report the first sample separately from the median and range of subsequent searches. */
+function report(query:string,metric:string,samples:number[]){
+  const warm=samples.slice(1).sort((a,b)=>a-b)
+  console.log(JSON.stringify({query,metric,firstMs:samples[0],warmMedianMs:warm[Math.floor(warm.length/2)],warmMinMs:warm[0],warmMaxMs:warm.at(-1)}))
+}
+
+const browserTiming=process.argv.includes('--browser')
 const directory=await mkdtemp(join(tmpdir(),'chulane-search-benchmark-'))
 const file=join(directory,'library.sqlite')
-const host=await serve({file,assets:'.',editorKey:'benchmark'})
+const host=await serve({file,assets:browserTiming?resolve('dist'):'.',editorKey:'benchmark'})
 const prefix='Measured 42 m. '.repeat(16000)+'🧭Место '.repeat(40)
 const prefixLength=Array.from(prefix).length
 try{
@@ -55,7 +62,46 @@ try{
         }
       }
     }
-    const warm=samples.slice(1).sort((a,b)=>a-b)
-    console.log(JSON.stringify({query,firstMs:samples[0],warmMedianMs:warm[5],warmMinMs:warm[0],warmMaxMs:warm.at(-1)}))
+    report(query,'httpToJson',samples)
+  }
+
+  if(browserTiming){
+    const {chromium,expect}=await import('@playwright/test')
+    const browser=await chromium.launch()
+    try{
+      const page=await browser.newPage()
+      await page.context().addCookies([{url:host.url,name:'chulane',value:cookie.slice('chulane='.length)}])
+      await page.goto(host.url+'/?workspace='+workspace)
+      const input=page.getByRole('textbox',{name:'Search pages'})
+      const status=page.getByRole('status',{name:'Library search'})
+      await expect(status).toHaveText('1000 pages')
+      for(const submit of [false,true]){
+        const times=new Map<string,number[]>()
+        for(let i=0;i<12;i++)for(const [query,count] of [['target beacon',64],['absent word',0]] as const){
+          // Start at the input event. Stop at React's result-count commit, excluding Playwright polling.
+          await status.evaluate((node,expected)=>{
+            performance.clearMarks('search-input')
+            performance.clearMeasures('search-results')
+            document.addEventListener('input',()=>performance.mark('search-input'),{capture:true,once:true})
+            const observer=new MutationObserver(()=>{
+              if(node.textContent!==expected)return
+              observer.disconnect()
+              performance.measure('search-results','search-input')
+            })
+            observer.observe(node,{childList:true,characterData:true,subtree:true})
+          },count+' pages')
+          await input.fill(query)
+          if(submit)await input.press('Enter')
+          await expect(status).toHaveText(count+' pages')
+          const elapsed=await page.evaluate(()=>performance.getEntriesByName('search-results','measure')[0]?.duration)
+          assert.ok(typeof elapsed==='number')
+          const samples=times.get(query)??[]
+          samples.push(elapsed);times.set(query,samples)
+          await expect(page.getByRole('list',{name:'Page list'}).getByRole('listitem')).toHaveCount(count)
+          await expect(input).toBeFocused()
+        }
+        for(const [query,samples] of times)report(query,submit?'chromiumSubmitInputToResultsDOM':'chromiumTypingInputToResultsDOM',samples)
+      }
+    }finally{await browser.close()}
   }
 }finally{await host.close();await rm(directory,{recursive:true,force:true})}

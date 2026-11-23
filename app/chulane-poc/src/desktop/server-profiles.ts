@@ -1,8 +1,11 @@
 /** Own saved server addresses and isolate each remote site's cookies and windows from the local Electron host. */
+import {titleBarOptions,mountWindowTitle} from './window-title'
+import {mountAgentWebLinks} from './agent-web-links'
 import {BrowserWindow,ipcMain,session,type IpcMainInvokeEvent} from 'electron'
 import {DatabaseSync} from 'node:sqlite'
 import {createHash} from 'node:crypto'
 import {join} from 'node:path'
+import {validSidebarWidth,type SidebarWidths} from '../shared/sidebar-widths'
 import {themeSchema} from '../shared/theme'
 import type {ServerProfile} from '../shared/server-profiles'
 
@@ -31,7 +34,7 @@ export function mountServerProfiles(local:BrowserWindow,localOrigin:string,dir:s
       const url=origin+'/api/workspaces'
       const isolated=partition(origin)
       const response=await isolated.fetch(url,{credentials:'include',redirect:'error',signal:AbortSignal.timeout(4000)})
-      if(response.status===401){await response.body?.cancel();return {origin,status:'signed-out',workspaces:[]}}
+      if(response.status===401){await response.body?.cancel();return {origin,status:'signed-out',workspaces:[],invitationCount:0}}
       if(!response.ok){await response.body?.cancel();throw Error()}
       // A server address is user-selected. Bound its untrusted response before parsing in Electron main.
       const reader=response.body?.getReader()
@@ -51,8 +54,9 @@ export function mountServerProfiles(local:BrowserWindow,localOrigin:string,dir:s
         if(!Number.isSafeInteger(id)||id<=0||typeof name!=='string'||name.length>250)throw Error()
         return {id,name}
       })
-      return {origin,status:'connected',workspaces}
-    }catch{return {origin,status:'unavailable',workspaces:[]}}
+      const invitationCount=Array.isArray(value.invitations)?value.invitations.length:0
+      return {origin,status:'connected',workspaces,invitationCount}
+    }catch{return {origin,status:'unavailable',workspaces:[],invitationCount:0}}
   }
   // The loopback origin changes after restart; keep local appearance with device settings.
   db.exec('CREATE TABLE IF NOT EXISTS appearance(id INTEGER PRIMARY KEY CHECK(id=1),theme TEXT NOT NULL)')
@@ -65,6 +69,20 @@ export function mountServerProfiles(local:BrowserWindow,localOrigin:string,dir:s
     authorize(event)
     if(value===null)db.prepare('DELETE FROM appearance WHERE id=1').run()
     else db.prepare('INSERT INTO appearance VALUES(1,?) ON CONFLICT(id) DO UPDATE SET theme=excluded.theme').run(JSON.stringify(themeSchema.parse(value)))
+  })
+  db.exec("CREATE TABLE IF NOT EXISTS sidebar_widths(side TEXT PRIMARY KEY CHECK(side IN ('library','agent')),width INTEGER NOT NULL)")
+  ipcMain.handle('sidebar-widths:read',event=>{
+    authorize(event)
+    const widths:SidebarWidths={}
+    for(const {side,width} of db.prepare('SELECT side,width FROM sidebar_widths').all()){
+      if((side==='library'||side==='agent')&&validSidebarWidth(side,width))widths[side]=width
+    }
+    return widths
+  })
+  ipcMain.handle('sidebar-widths:save',(event,side,width)=>{
+    authorize(event)
+    if((side!=='library'&&side!=='agent')||!validSidebarWidth(side,width))throw Error('Invalid sidebar width.')
+    db.prepare('INSERT INTO sidebar_widths(side,width) VALUES(?,?) ON CONFLICT(side) DO UPDATE SET width=excluded.width').run(side,width)
   })
   ipcMain.handle('servers:list',async event=>{
     authorize(event)
@@ -87,11 +105,13 @@ export function mountServerProfiles(local:BrowserWindow,localOrigin:string,dir:s
     const isolated=partition(origin)
     isolated.setPermissionRequestHandler((_contents,_permission,respond)=>respond(false))
     isolated.setPermissionCheckHandler(()=>false)
-    const window=new BrowserWindow({width:1180,height:820,title:origin,webPreferences:{session:isolated,sandbox:true,contextIsolation:true,nodeIntegration:false}})
+    const window=new BrowserWindow({...titleBarOptions,width:1180,height:820,title:origin,webPreferences:{additionalArguments:['--chulane-server-window'],session:isolated,preload:join(__dirname,'agent-link-preload.cjs'),sandbox:true,contextIsolation:true,nodeIntegration:false}})
     windows.set(window,origin)
     window.on('closed',()=>windows.delete(window))
     const contents=window.webContents
     contents.on('page-title-updated',event=>event.preventDefault())
+    mountWindowTitle(window,origin)
+    mountAgentWebLinks(contents,origin)
     contents.setWindowOpenHandler(()=>({action:'deny'}))
     contents.on('will-navigate',(event,target)=>{if(new URL(target).origin!==origin)event.preventDefault()})
     contents.on('will-redirect',(event,target)=>{if(new URL(target).origin!==origin)event.preventDefault()})
@@ -106,7 +126,7 @@ export function mountServerProfiles(local:BrowserWindow,localOrigin:string,dir:s
     db.prepare('DELETE FROM servers WHERE origin=?').run(origin)
   })
   return ()=>{
-    for(const channel of ['servers:list','servers:open','servers:forget','appearance:read','appearance:save'])ipcMain.removeHandler(channel)
+    for(const channel of ['servers:list','servers:open','servers:forget','appearance:read','appearance:save','sidebar-widths:read','sidebar-widths:save'])ipcMain.removeHandler(channel)
     for(const window of windows.keys())window.destroy()
     db.close()
   }

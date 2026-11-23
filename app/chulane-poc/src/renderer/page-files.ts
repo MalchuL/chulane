@@ -2,13 +2,28 @@
 import type {ReactEditorExtension} from '@chulane/rivto-react'
 import {fileExtension,type BinaryProvider} from '@chulane/rivto-react/extensions'
 import {request} from './api'
+import {metadataOperationId} from './document-outbox'
+import {attachmentSizeError,maxAttachmentBytes} from '../shared/attachment-upload'
 import {attachmentFilename} from '../shared/attachment-filename'
 import {downloadBlob} from './download'
 
 /** Use the same upload and device-cache path for picker, paste and drop. */
 export async function uploadPageFile(workspace:number,page:number,headers:Record<string,string>,name:string,body:Blob,signal?:AbortSignal){
-  const response=await request('pages/'+page+'/files?workspace='+workspace+'&name='+encodeURIComponent(name),{method:'POST',headers,body,signal})
-  return (await response.json()).id as number
+  if(body.size>maxAttachmentBytes)throw Error(attachmentSizeError)
+  const path='pages/'+page+'/files?workspace='+workspace+'&name='+encodeURIComponent(name)
+  const keyedHeaders={...headers,'Idempotency-Key':metadataOperationId()}
+  async function send(method:'PUT'|'POST'){
+    const response=await request(path,{method,headers:method==='PUT'?keyedHeaders:headers,body,signal})
+    return (await response.json()).id as number
+  }
+  try{return await send('PUT')}catch(error){
+    signal?.throwIfAborted()
+    const status=(error as {status?:number}).status
+    // Older hosts explicitly reject PUT. Their original POST is sent only once.
+    if(status===405)return send('POST')
+    if(status!==undefined&&![502,503,504].includes(status))throw error
+    return send('PUT')
+  }
 }
 
 type PageFilesOptions={workspace:number;page:number;installation?:string;writable:boolean;headers:Record<string,string>;added?:()=>void}

@@ -15,5 +15,5 @@ unshare --user --map-root-user dpkg --root="$root" --log="$stage/install.log" --
 }
 dpkg-query --admindir="$root/var/lib/dpkg" --showformat='${Status}\n' --show chulane | grep -Fx 'install ok installed'
 export CHULANE_TEST_INSTALLED_DESKTOP="$root/usr/bin/chulane"
-pnpm smoke desktop
+pnpm smoke:installed
 pnpm smoke:agent

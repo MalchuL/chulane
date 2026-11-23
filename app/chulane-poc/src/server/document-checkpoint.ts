@@ -3,7 +3,37 @@ import type {DatabaseSync} from 'node:sqlite'
 import * as Y from 'yjs'
 import {agentDocument} from './agent-document.ts'
 
+/** Maximum encoded Yjs snapshot accepted by the host for a single page. */
+export const MAX_DOCUMENT_BYTES=16*1024*1024
+
+/** Keep the server's synchronization vector small enough to echo in a request header. */
+export function documentVector(state:Uint8Array){
+  const vector=Buffer.from(Y.encodeStateVectorFromUpdate(state)).toString('base64')
+  return vector.length<=4096?vector:undefined
+}
+
+/** Rebuild a self-contained snapshot before journaling a revision-checked incremental write. */
+export function applyLiveUpdate(base:Uint8Array|null,update:Uint8Array){
+  if(!base)throw Object.assign(Error('Read the document before publishing changes'),{status:409})
+  const doc=new Y.Doc()
+  try{
+    try{Y.applyUpdate(doc,base);Y.applyUpdate(doc,update)}
+    catch{throw Object.assign(Error('Invalid document update'),{status:400})}
+    // A delta can decode successfully while waiting on missing structs or a deletion dependency.
+    if(doc.store.pendingStructs||doc.store.pendingDs)throw Object.assign(Error('Document update needs a fresh base'),{status:409})
+    const state=Buffer.from(Y.encodeStateAsUpdate(doc))
+    if(state.byteLength>MAX_DOCUMENT_BYTES)throw Object.assign(Error('Edited document exceeds the size limit'),{status:413})
+    return state
+  }finally{doc.destroy()}
+}
+
 export type LiveDrafts=Map<number,{state:Buffer;rev:number}>
+/** Validate a Rivto snapshot and derive the searchable writing for its checkpoint. */
+export function checkpointWriting(id:number,state:Uint8Array){
+  try{return agentDocument({id,title:'',plain:'',state}).plain}
+  catch{throw Object.assign(Error('Invalid document state'),{status:400})}
+}
+
 /** Recover interrupted saves before serving requests. Only the latest acknowledged snapshot per page is needed. */
 export function openLiveDraftJournal(db:DatabaseSync){
   db.exec(`CREATE TABLE IF NOT EXISTS live_document_drafts(
@@ -15,10 +45,7 @@ export function openLiveDraftJournal(db:DatabaseSync){
     ON CONFLICT(page) DO UPDATE SET state=excluded.state,plain=excluded.plain`)
   /** Validate the writing projection now so every acknowledged draft can be restored without decoding it on startup. */
   return (id:number,state:Buffer)=>{
-    let plain:string
-    try{plain=agentDocument({id,title:'',plain:'',state}).plain}
-    catch{throw Object.assign(Error('Invalid document state'),{status:400})}
-    write.run(id,state,plain)
+    write.run(id,state,checkpointWriting(id,state))
   }
 }
 
@@ -79,7 +106,7 @@ export function mergeTrashedDocument(db:DatabaseSync,drafts:LiveDrafts,workspace
       state=Y.mergeUpdates(existing?[existing,incoming]:[incoming])
       plain=agentDocument({id,title:String(target.title),plain:String(target.plain),state}).plain
     }catch{throw Object.assign(Error('Invalid document state'),{status:400})}
-    if(state.length+Buffer.byteLength(plain)>16*1024*1024)throw Object.assign(Error('Merged document exceeds the size limit'),{status:413})
+    if(state.length>MAX_DOCUMENT_BYTES)throw Object.assign(Error('Merged document exceeds the size limit'),{status:413})
     db.prepare('UPDATE pages SET state=?,plain=?,rev=rev+1 WHERE workspace=? AND id=?').run(state,plain,workspace,id)
     db.exec('COMMIT')
   }catch(error){db.exec('ROLLBACK');throw error}

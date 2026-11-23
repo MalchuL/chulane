@@ -31,6 +31,22 @@ export function workspaceInvitations(db:DatabaseSync){
     if(!result.changes)reject(409,'That account already has a pending invitation.')
     return {id:Number(result.lastInsertRowid)}
   }
+  /** Replace a pending offer atomically so acceptance applies only to the role the recipient saw. */
+  function revise(workspace:number,id:number,role:MemberRole){
+    if(!memberRoles.includes(role))reject(400,'Choose an existing workspace role.')
+    db.exec('BEGIN IMMEDIATE')
+    try{
+      const offer=db.prepare('SELECT account,role FROM workspace_invitations WHERE workspace=? AND id=?').get(workspace,id)
+      if(!offer)reject(404,'Invitation unavailable.')
+      if(offer.role!==role){
+        revoke(workspace,id)
+        const result=db.prepare('INSERT INTO workspace_invitations(workspace,account,role) VALUES(?,?,?)').run(workspace,offer.account,role)
+        id=Number(result.lastInsertRowid)
+      }
+      db.exec('COMMIT')
+      return {id}
+    }catch(error){db.exec('ROLLBACK');throw error}
+  }
   /** Scope cancellation to the workspace whose owner made the request. */
   function revoke(workspace:number,id:number){
     if(!db.prepare('DELETE FROM workspace_invitations WHERE workspace=? AND id=?').run(workspace,id).changes)
@@ -48,5 +64,5 @@ export function workspaceInvitations(db:DatabaseSync){
       db.exec('COMMIT')
     }catch(error){db.exec('ROLLBACK');throw error}
   }
-  return {incoming,pending,invite,revoke,respond}
+  return {incoming,pending,invite,revise,revoke,respond}
 }

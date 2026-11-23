@@ -1,57 +1,114 @@
 /** The workspace sidebar owns chat selection and the foreground response connection across document switches. */
-import {useContext,useEffect,useImperativeHandle,useRef,useState} from 'react'
+import {agentWebLink} from '../shared/agent-web-link'
+import {editorLinkTarget,type EditorTarget} from './editor-address'
+import {AgentModeBadge,AgentModePicker} from './agent-mode-picker'
+import {AgentMessage} from './agent-message'
+import {Disclosure} from './ui/disclosure'
+import {useContext,useEffect,useImperativeHandle,useMemo,useRef,useState} from 'react'
 import {useDragDropMonitor,useDroppable} from '@dnd-kit/react'
 import {ArrowUp,ArrowUpRight,BookOpen,Check,Clock3,Download,FileText,FolderPlus,Layers,Link2,MessageSquare,Paperclip,Pencil,Plus,Settings2,Square,Trash2,Users,X} from 'lucide-react'
-import {Alert,Badge,Button,Dialog,DialogClose,DialogContent,DialogFooter,DialogTitle,DialogTrigger,Input,Label,NativeSelect,NativeSelectOption,Popover,PopoverContent,PopoverTrigger,Textarea} from './ui'
+import {labeledReferences} from '../shared/library'
+import {SidebarHandle} from './sidebar-handle'
+import {ScrollArea} from './ui/scroll-area'
+import {Command,CommandInput,CommandItem,CommandList,CommandEmpty,ErrorAlert,Badge,Button,Dialog,DialogClose,DialogContent,DialogFooter,DialogTitle,DialogTrigger,Input,Label,NativeSelect,NativeSelectOption,Popover,PopoverContent,PopoverTrigger,Textarea} from './ui'
 import {BLOCK_REFERENCE,BlockLinkComposer} from './block-links'
-import {sourceHref,MAX_BLOCK_LINKS,type BlockSource,type LocalAgent} from '../shared/agent'
+import {sourceHref,MAX_BLOCK_LINKS,MAX_PAGE_REFERENCES,type ChatActivity,type BlockSource,type LocalAgent} from '../shared/agent'
 import {CHAT_COMPOSER,PAGE_REFERENCE} from './page-drag'
 import {ProposalHistory,ReviewDestination} from './proposal-history'
 import {AgentTasks} from './agent-tasks'
 import {json,request} from './api'
+import {metadataOperationId} from './document-outbox'
+import {useCreationRequest} from './use-creation-request'
+import {agentModes,type AgentMode} from '../shared/agent'
+import type {CanvasValue} from '../shared/agent-canvas'
 import type {AppliedEdit,Chat,Conversation,EditPreview,Source} from '../shared/agent'
 
 type Settings={canSavePlugin:boolean;hasApiKey:boolean;agent?:LocalAgent;localAgents:LocalAgent[];configured:boolean;configurable:boolean;model:string;chats:Chat[]}
 export type ApplyInEditor=(page:number,commit:()=>Promise<AppliedEdit>)=>Promise<void>
-type Props={destinationPath:(id:number|null)=>string|null;openProject:(id:number)=>Promise<void>;downloadAttachment:(page:number,file:{id:number;name:string})=>Promise<void>;ws:number;pages:Source[];page?:Source;write:boolean;visible:boolean;close:()=>void;open:(source:Source,signal?:AbortSignal)=>Promise<void>;checkpoint:()=>Promise<void>;applyPageEdit:ApplyInEditor}
+type Props={permissionScope:string;surface:'canvas'|'page';receiveEdit:(edit:AppliedEdit)=>Promise<void>;pageLabel:(page:Pick<Source,'id'|'title'>)=>string;destinationPath:(id:number|null)=>string|null;openProject:(id:number)=>Promise<void>;downloadAttachment:(page:number,file:{id:number;name:string})=>Promise<void>;ws:number;pages:Source[];page?:Source;write:boolean;offline:boolean;visible:boolean;close:()=>void;open:(source:EditorTarget,signal?:AbortSignal)=>Promise<void>;checkpoint:(sources?:readonly number[],signal?:AbortSignal)=>Promise<void>;applyPageEdit:ApplyInEditor}
+/** Label saved citations using only the titles and destinations recorded in this answer. */
+function labeledCitations(sources:Source[]){
+  const pages=new Map(sources.map(source=>[source.id,source.title]))
+  const pageNames=new Map(labeledReferences([...pages],([id,name])=>({id,name})).map(({item:[id],label})=>[id,label]))
+  return labeledReferences(sources,source=>{
+    const title=pageNames.get(source.id)!
+    if(source.attachment)return {id:source.attachment.id,name:title+' · '+source.attachment.name}
+    const name=source.excerpt?title+' · '+source.excerpt:title
+    const qualifier=source.block?'Block #'+source.block:source.surface?'Canvas':'Page #'+source.id
+    return {id:source.id,name,qualifier}
+  })
+}
+/** Describe geometry changes in the review without exposing internal version metadata. */
+function canvasDescription(json:string){
+  const {type,text,x,y,width,height}=JSON.parse(json) as CanvasValue
+  return [type,text&&'“'+text+'”',width+' × '+height,'at ('+x+', '+y+')'].filter(Boolean).join(' · ')
+}
+type DraftBlockLink=BlockSource & {unavailable?:boolean}
+type ComposerDraft={text:string;attachments:Pick<Source,'id'|'title'>[];blockLinks:DraftBlockLink[];background:boolean}
+const emptyDraft:ComposerDraft={text:'',attachments:[],blockLinks:[],background:false}
 const PANEL='agent-panel',LOG='agent-log',REVIEW='agent-review'
 /** Render shared history, model setup, streamed text and durable block-level review. */
-export function AgentSidebar({destinationPath,openProject,downloadAttachment,ws,pages,page,write,visible,close,open,checkpoint,applyPageEdit}:Props){
+export function AgentSidebar({permissionScope,surface,receiveEdit,pageLabel,destinationPath,openProject,downloadAttachment,ws,pages,page,write,offline,visible,close,open,checkpoint,applyPageEdit}:Props){
+  const pageById=useMemo(()=>new Map(pages.map(source=>[source.id,source])),[pages])
   const [settings,S]=useState<Settings>(),[chat,C]=useState(0),[view,V]=useState<Conversation>({messages:[],edits:[],projects:[],pages:[]})
-  const [draft,D]=useState(''),[busy,B]=useState(false),[error,E]=useState(''),[setup,G]=useState(false),[key,K]=useState(''),[model,M]=useState(''),[notice,N]=useState('')
-  const [background,setBackground]=useState(false)
+  const [busy,B]=useState(false),[error,E]=useState(''),[setup,G]=useState(false),[key,K]=useState(''),[model,M]=useState(''),[notice,N]=useState('')
+  const [refreshError,setRefreshError]=useState('')
+  const [drafts,setDrafts]=useState<Record<number,ComposerDraft>>({})
+  const {text:draft,attachments,blockLinks,background}=drafts[chat]??emptyDraft
+  const initial=drafts[0]
+  const hasInitialDraft=!!(initial&&(initial.text||initial.attachments.length||initial.blockLinks.length||initial.background))
+  const canWriteChat=write&&!offline
+  /** Keep unsent text and explicit context local to the selected conversation. */
+  function updateDraft(patch:Partial<ComposerDraft>){
+    setDrafts(current=>({...current,[chat]:{...(current[chat]??emptyDraft),...patch}}))
+  }
   const result=useRef<number|null>(null)
-  const running=view.messages.some(m=>m.status==='running')
-  const permissionKey='chulane.agent.allowEdits.'+ws
-  const [allowEdits,setAllowEdits]=useState(()=>sessionStorage.getItem(permissionKey)!=='false')
+  const runningMessage=view.messages.find(m=>m.status==='running')?.id
+  const running=runningMessage!==undefined
+  const permissionKey='chulane.agent.mode.'+permissionScope
+  const [mode,setMode]=useState<AgentMode>(()=>{
+    const saved=sessionStorage.getItem(permissionKey)
+    return agentModes.find(value=>value===saved)??(sessionStorage.getItem('chulane.agent.allowEdits.'+ws)==='false'?'ask':'suggest')
+  })
   const [connection,setConnection]=useState<LocalAgent|'api'|null>(null)
   const selectedProvider=connection??settings?.agent??(settings?.hasApiKey?'api':settings?.localAgents[0]??'api')
   const [switching,setSwitching]=useState(false),[savingPlugin,setSavingPlugin]=useState(false)
   const pinned=settings?.chats.find(item=>item.id===chat)?.agent
   const ready=!!(settings?.configured||pinned)
   const active=useRef<AbortController|null>(null),selected=useRef(0),alive=useRef(true),sequence=useRef(0)
-  const [attachments,attach]=useState<number[]>([]),[dragging,drag]=useState(false),[picker,P]=useState(false),[filter,Q]=useState('')
-  const [blockLinks,setBlockLinks]=useState<BlockSource[]>([])
+  const observer=useRef<AbortController|null>(null)
+  const [dragging,drag]=useState(false),[picker,P]=useState(false)
+  const pickedPage=useRef(false)
   const composer=useRef<HTMLTextAreaElement>(null),log=useRef<HTMLDivElement>(null),follow=useRef(true)
-  const refs=pages.filter(p=>p.id!==page?.id && attachments.includes(p.id))
+  const attachedIds=new Set(attachments.map(source=>source.id))
+  const missingPage=[...attachments,...blockLinks].some(source=>!pageById.has(source.id))
   const {ref:dropRef,isDropTarget}=useDroppable({id:CHAT_COMPOSER,accept:[PAGE_REFERENCE,BLOCK_REFERENCE],disabled:!visible||!write||busy})
+  /** Keep an explicit attachment even while it is also the active document. */
   function addPage(id:number){
-    if(!write||busy||!pages.some(p=>p.id===id))return
-    if(page?.id===id || refs.some(p=>p.id===id)){N('Page already in context.');return}
-    if(refs.length>=3){N('Remove a page to add another.');return}
-    attach([...refs.map(p=>p.id),id]);P(false);Q('');N('Added '+pages.find(p=>p.id===id)!.title)
+    const item=pageById.get(id)
+    if(!write||busy||!item)return
+    if(attachedIds.has(id)){N('Page already attached.');return}
+    if(attachments.length>=MAX_PAGE_REFERENCES){N('Remove a page to add another.');return}
+    updateDraft({attachments:[...attachments,{id,title:item.title}]})
+    pickedPage.current=picker
+    P(false);N('')
   }
   /** Merge references from either the keyboard grip or a completed composer drop. */
   function addBlockLinks(incoming:BlockSource[]){
     if(!visible||!write||busy)return
     const unique=new Map([...blockLinks,...incoming].map(s=>[s.id+'/'+s.block,s]))
     if(unique.size>MAX_BLOCK_LINKS){N('A message can include up to '+MAX_BLOCK_LINKS+' block links.');return}
-    setBlockLinks([...unique.values()]);N('Block links added to context.')
+    updateDraft({blockLinks:[...unique.values()]});N('')
     composer.current?.focus()
   }
   useImperativeHandle(useContext(BlockLinkComposer),()=>addBlockLinks)
   useDragDropMonitor({
-    onDragStart:e=>{if(e.operation.source?.type===PAGE_REFERENCE||e.operation.source?.type===BLOCK_REFERENCE)drag(true)},
+    onDragStart:e=>{
+      const source=e.operation.source
+      // A pointer released over its original grip can generate a click even after cancelling the drag.
+      if(source?.type===BLOCK_REFERENCE)source.data.dragged.current=true
+      if(source?.type===PAGE_REFERENCE||source?.type===BLOCK_REFERENCE)drag(true)
+    },
     onDragEnd:e=>{
       drag(false)
       if(e.canceled || e.operation.target?.id!==CHAT_COMPOSER || busy || !write)return
@@ -82,53 +139,150 @@ export function AgentSidebar({destinationPath,openProject,downloadAttachment,ws,
       if(alive.current&&selected.current===id&&sequence.current===seq)select(0)
     }
   }
-  function select(id:number){follow.current=true;selected.current=id;C(id);V({messages:[],edits:[],projects:[],pages:[]});if(id)void load(id).catch(e=>E(e.message))}
+  function select(id:number){N('');E('');P(false);follow.current=true;selected.current=id;C(id);V({messages:[],edits:[],projects:[],pages:[]});if(id)void load(id).catch(e=>E(e.message))}
   useEffect(()=>{alive.current=true;return()=>{alive.current=false;active.current?.abort()}},[])
   useEffect(()=>{
-    if(!visible)return
+    if(!visible||offline)return
     let live=true
     async function refresh(){try{const data=await settingsNow();if(!live)return
       if(!data.chats.some(item=>item.id===selected.current)){
-        const next=data.chats[0]?.id??0
+        const next=hasInitialDraft?0:data.chats[0]?.id??0
         if(selected.current!==next)select(next)
       }
-      else if(selected.current && !active.current)await load(selected.current)
-    }catch(e){if(live)E((e as Error).message)}}
+      else if(selected.current && !active.current && !observer.current)await load(selected.current)
+      if(live)setRefreshError('')
+    }catch(e){if(live)setRefreshError((e as Error).message)}}
     void refresh();const timer=setInterval(refresh,2500)
     return()=>{live=false;clearInterval(timer)}
-  },[visible])
-  async function newChat(){const {id}=await json('agent/chats'+suffix,'POST');select(id);await settingsNow();return id as number}
+  },[visible,offline,hasInitialDraft])
+  /** Reconcile the initial history snapshot with later text and activity on either connection. */
+  async function readTurn(response:Response,id:number,signal:AbortSignal,initiator:boolean){
+    const reader=response.body!.pipeThrough(new TextDecoderStream()).getReader()
+    let buffer=''
+    for(;;){
+      const {done,value}=await reader.read();if(done)break
+      buffer+=value
+      let newline:number
+      while((newline=buffer.indexOf('\n'))>=0){
+        const event=JSON.parse(buffer.slice(0,newline));buffer=buffer.slice(newline+1)
+        if(signal.aborted||!alive.current)return
+        if(selected.current!==id)continue
+        if(event.openPage&&initiator){
+          try{await currentOpen.current(event.openPage,signal)}catch(error){if(!signal.aborted)E((error as Error).message)}
+        }
+        if(event.appliedEdit&&initiator){
+          try{await receiveEdit(event.appliedEdit)}catch(e){if(!signal.aborted)E((e as Error).message)}
+        }
+        if(event.error)E(event.error)
+        if(event.delta||event.part){
+          V(prev=>({...prev,messages:prev.messages.map(m=>{
+            if(m.id!==event.message)return m
+            // The initial history read may already include several queued wire events.
+            if(event.delta){
+              const overlap=Math.max(0,m.text.length-(event.offset??m.text.length))
+              return {...m,text:m.text+event.delta.slice(overlap)}
+            }
+            const part:ChatActivity=event.part,activity=[...(m.activity??[])]
+            const index=activity.findIndex(item=>item.id===part.id)
+            const previous=activity[index]
+            if(previous&&previous.revision>=part.revision)return m
+            if(event.detailOffset!==undefined&&event.detailOffset!==(previous?.detail.length??0))return m
+            const next=event.detailOffset===undefined?part:{...part,detail:(previous?.detail??'')+part.detail}
+            if(index===-1)activity.push(next)
+            else activity[index]=next
+            return {...m,activity}
+          })}))
+        }else if(event.message || event.proposal)await load(id)
+      }
+    }
+  }
+  useEffect(()=>{
+    if(!visible||offline||busy||!chat||!runningMessage)return
+    const controller=new AbortController(),{signal}=controller
+    let retry:ReturnType<typeof setTimeout>
+    /** Reconnect to the same running turn after a network interruption. */
+    async function watch(){
+      observer.current=controller
+      try{
+        const response=await request(path(chat)+'/turn'+suffix,{signal})
+        if(response.status!==204)await readTurn(response,chat,signal,false)
+      }catch{/* The snapshot below also recovers from a dropped stream. */}
+      finally{
+        if(observer.current===controller)observer.current=null
+      }
+      if(signal.aborted)return
+      try{await load(chat)}catch(e){if(!signal.aborted)setRefreshError((e as Error).message)}
+      if(!signal.aborted)retry=setTimeout(watch,2500)
+    }
+    void watch()
+    return()=>{controller.abort();clearTimeout(retry)}
+  },[visible,offline,busy,chat,runningMessage,ws])
+  const creation=useCreationRequest()
+  const pendingTurns=useRef(new Map<number,{signature:string;operationId:string}>())
+  /** The first server-created chat takes ownership of the initial unsent composer. */
+  async function newChat(agent?:LocalAgent){
+    const first=selected.current===0
+    const {id}=await creation.post('agent/chats'+suffix,agent?{agent}:{}).catch(error=>{
+      // A deleted chat cannot receive the draft. A later explicit retry may start a fresh chat.
+      if(error.status===404)creation.reset()
+      throw error
+    })
+    creation.reset()
+    if(first)setDrafts(current=>{
+      if(!current[0])return current
+      const {0:initial,...rest}=current
+      return {...rest,[id]:initial}
+    })
+    select(id);await settingsNow()
+    return id as number
+  }
   async function send(){
-    if(active.current || switching || running || !draft.trim())return
+    if(!canWriteChat || !ready || active.current || switching || running || missingPage || !draft.trim())return
+    // Follow this turn until the reader scrolls away, including while delivery is pending.
+    follow.current=true
     const controller=new AbortController();active.current=controller;B(true);E('')
     let id=chat
     try{
-      await checkpoint()
+      const sources=[...attachments,...blockLinks].map(source=>source.id)
+      if(page)sources.push(page.id)
+      try{await checkpoint(sources,controller.signal)}
+      catch(error){throw Error('Could not sync the documents for this message. '+(error as Error).message+' Send again to retry.')}
+      controller.signal.throwIfAborted()
       if(!id)id=await newChat()
-      const response=await request(path(id)+'/turn'+suffix,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({allowEdits,background,text:draft,page:page?.id??null,references:refs.map(p=>p.id),blockLinks:blockLinks.map(({id,block})=>({id,block}))}),signal:controller.signal})
-      D('');attach([]);setBlockLinks([]);N('');follow.current=true
-      if(response.status===202){setBackground(false);N('Background task started.');return}
-      const reader=response.body!.pipeThrough(new TextDecoderStream()).getReader()
-      let buffer='',received=''
-      for(;;){
-        const {done,value}=await reader.read();if(done)break
-        buffer+=value
-        let newline:number
-        while((newline=buffer.indexOf('\n'))>=0){
-          const event=JSON.parse(buffer.slice(0,newline));buffer=buffer.slice(newline+1)
-          if(event.openPage&&alive.current&&!controller.signal.aborted){
-            try{await currentOpen.current(event.openPage,controller.signal)}catch(error){if(!controller.signal.aborted)E((error as Error).message)}
-          }
-          if(event.error)E(event.error)
-          if(event.delta){received+=event.delta;const text=received;V(prev=>({...prev,messages:prev.messages.map(m=>m.id===event.message?{...m,text}:m)}))}
-          else if(event.message || event.proposal)await load(id)
-        }
+      const turn={mode,allowEdits:mode!=='ask',surface,background,text:draft,page:page?.id??null,references:attachments.map(p=>p.id).filter(id=>id!==page?.id),blockLinks:blockLinks.map(({id,block})=>({id,block}))}
+      const signature=JSON.stringify(turn)
+      let delivery=pendingTurns.current.get(id)
+      if(delivery?.signature!==signature){
+        delivery={signature,operationId:metadataOperationId()}
+        pendingTurns.current.set(id,delivery)
       }
-    }catch(e){if(alive.current && !controller.signal.aborted)E((e as Error).message)}
+      const response=await request(path(id)+'/turn'+suffix,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...turn,operationId:delivery.operationId}),signal:controller.signal})
+      pendingTurns.current.delete(id)
+      setDrafts(current=>{
+        const {[id]:submitted,...rest}=current
+        // Typing can continue while the checkpoint or host acknowledgement is pending.
+        if(submitted&&submitted.text!==draft)rest[id]={...emptyDraft,text:submitted.text}
+        return rest
+      })
+      N('')
+      if(response.status===202){N((await response.json()).replayed?'Background task already submitted.':'Background task started.');return}
+      await readTurn(response,id,controller.signal,true)
+    }catch(e){
+      if(alive.current&&!controller.signal.aborted){
+        const failure=e as Error & {unavailableBlocks?:Pick<BlockSource,'id'|'block'>[]}
+        const missing=new Set(failure.unavailableBlocks?.map(link=>link.id+'/'+link.block))
+        if(missing.size)setDrafts(current=>{
+          const saved=current[id]
+          if(!saved)return current
+          return {...current,[id]:{...saved,blockLinks:saved.blockLinks.map(link=>({...link,unavailable:missing.has(link.id+'/'+link.block)}))}}
+        })
+        else E(failure.message)
+      }
+    }
     finally{active.current=null;if(alive.current){B(false);if(id)await load(id).catch(e=>E(e.message));await settingsNow().catch(e=>E(e.message))}}
   }
   /** Reconcile a lost or contested decision against its own chat record without replaying the write. */
-  async function submitReview(kind:'edits'|'pages'|'projects',id:number,choice:'apply'|'dismiss',review?:{reviewedPath:string|null},editorPage?:number){
+  async function submitReview(kind:'edits'|'pages'|'projects',id:number,choice:'apply'|'dismiss',review?:{reviewedPath:string|null}|{reviewedTitle:string},editorPage?:number){
     let responseError:unknown
     const commit=()=>json(path(chat)+'/'+kind+'/'+id+'/'+choice+suffix,'POST',review).catch(error=>{responseError=error;throw error})
     N('')
@@ -151,36 +305,15 @@ export function AgentSidebar({destinationPath,openProject,downloadAttachment,ws,
     }
     await load(chat)
   }
-  async function decide(edit:EditPreview,choice:'apply'|'dismiss'){
-    await checkpoint()
-    await submitReview('edits',edit.id,choice,undefined,choice==='apply'&&edit.kind!=='rename'?edit.page:undefined)
+  async function decide(edit:EditPreview,choice:'apply'|'dismiss',reviewedTitle?:string){
+    if(choice==='apply'&&edit.kind==='canvas'&&(page?.id!==edit.page||surface!=='canvas'))await open({id:edit.page,surface:'canvas'})
+    else await checkpoint()
+    await submitReview('edits',edit.id,choice,reviewedTitle===undefined?undefined:{reviewedTitle},choice==='apply'&&edit.kind!=='rename'?edit.page:undefined)
   }
   function act(fn:()=>Promise<unknown>){E('');void fn().catch(e=>E(e.message))}
+  const panel=useRef<HTMLElement>(null)
   if(!visible)return null
-  return <aside className={PANEL} aria-label="Workspace agent">
-    <header data-part="agent-heading">
-      <span data-part="agent-mark"><Layers size={20}/></span>
-      <div><h2>Workspace agent</h2><small><Users size={12}/>Shared workspace chat</small></div>
-      {ready&&settings?.configurable&&write&&<Button variant="ghost" size="icon-sm" aria-label="Provider settings" title="Provider settings" aria-expanded={setup} onClick={()=>{G(!setup);setConnection(null)}}><Settings2/></Button>}
-      <Button size="icon-sm" variant="ghost" onClick={close} aria-label="Close agent" title="Close agent"><X/></Button>
-    </header>
-    <div data-part="conversation-bar"><MessageSquare size={15}/>
-      <NativeSelect aria-label="Conversation" value={chat} disabled={busy} size="sm" onChange={e=>select(Number(e.target.value))}>
-        {!chat&&<NativeSelectOption value={0}>New conversation</NativeSelectOption>}{settings?.chats.map(c=><NativeSelectOption key={c.id} value={c.id}>{c.title}</NativeSelectOption>)}</NativeSelect>
-      {write&&<ProposalHistory ws={ws} openSource={source=>act(()=>open(source))}/>}
-      <AgentTasks ws={ws} write={write} disabled={busy} openResult={task=>{result.current=task.id;select(task.chat)}}/>
-      {write&&settings?.chats.find(item=>item.id===chat)?.canDelete&&<Dialog key={chat}><DialogTrigger asChild>
-        <Button size="icon-sm" variant="ghost" title="Delete conversation" aria-label="Delete conversation"><Trash2/></Button>
-      </DialogTrigger><DialogContent aria-describedby="delete-chat-detail"><DialogTitle>Delete this conversation?</DialogTitle>
-        <p id="delete-chat-detail">This removes the conversation and its pending edits for everyone in this workspace. Any running response will stop.</p>
-        <DialogFooter><DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose><DialogClose asChild><Button variant="destructive" onClick={()=>act(async()=>{
-          await json(path(chat)+suffix,'DELETE');const data=await settingsNow()
-          if(selected.current===chat)select(data.chats[0]?.id??0)
-        })}>Delete conversation</Button></DialogClose></DialogFooter></DialogContent></Dialog>}
-      {write&&<Button size="icon-sm" variant="ghost" title="New chat" aria-label="New chat" disabled={busy} onClick={()=>act(newChat)}><Plus/></Button>}
-    </div>
-    <div role="log" aria-label="Chat messages" className={LOG} ref={log} onScroll={e=>{const n=e.currentTarget;follow.current=n.scrollHeight-n.scrollTop-n.clientHeight<60}}>
-      {settings&&(!ready || setup)&&<section data-part="provider-card">
+  const providerCard=settings&&<section data-part="provider-card">
         <strong><Settings2 size={15}/>Provider setup</strong>
         <p>Messages and selected page excerpts go to the provider you choose.</p>
         {!!settings.localAgents?.length&&write&&<div><Label htmlFor="agent-connection">Connection</Label><NativeSelect id="agent-connection" value={selectedProvider} onChange={e=>setConnection(e.target.value as LocalAgent|'api')}>
@@ -194,22 +327,62 @@ export function AgentSidebar({destinationPath,openProject,downloadAttachment,ws,
           <Label>OpenAI API key<Input type="password" required={!settings.hasApiKey} placeholder={settings.hasApiKey?'Saved key':undefined} autoComplete="off" value={key} onChange={e=>K(e.target.value)}/></Label>
           <Label>Model<Input required defaultValue={settings.model} onChange={e=>M(e.target.value)}/></Label>
           <Button size="sm">Save provider</Button></form>:<p>Ask the server operator to configure a local agent or an API key.</p>}
-      </section>}
-      {ready&&!view.messages.length&&!busy&&write&&<div data-part="start-chat">
-        <BookOpen size={26}/><h3>{page?'Work with this page':'Work with your pages'}</h3>
-        {(page?['Summarize this page','Suggest a clearer introduction']:['Find a page about…','Compare two pages']).map(text=><Button variant="ghost" size="sm" key={text} onClick={()=>{D(text);composer.current?.focus()}}>{text}<ArrowUpRight size={14}/></Button>)}
+      </section>
+  const draftLinks=labeledReferences(blockLinks,source=>{
+    const owner=pageById.get(source.id)
+    const title=owner?pageLabel(owner):source.title+' · #'+source.id
+    return {id:source.id,name:source.excerpt,qualifier:title+' · Block #'+source.block}
+  })
+  return <aside id="workspace-agent" ref={panel} className={PANEL} aria-label="Workspace agent"><SidebarHandle side="agent" report={E}/>
+    <header data-part="agent-heading">
+      <span data-part="agent-mark"><Layers size={20}/></span>
+      <div><h2>Workspace agent</h2><small><Users size={12}/>Shared workspace chat</small></div>
+      {ready&&settings?.configurable&&canWriteChat&&<Popover open={setup} onOpenChange={opened=>{G(opened);if(opened)setConnection(null)}}>
+        <PopoverTrigger asChild><Button variant="ghost" size="icon-sm" aria-label="Provider settings" title="Provider settings"><Settings2/></Button></PopoverTrigger>
+        <PopoverContent align="end" aria-label="Provider settings" container={panel.current}>{providerCard}</PopoverContent>
+      </Popover>}
+      <Button size="icon-sm" variant="ghost" onClick={close} aria-label="Close agent" title="Close agent"><X/></Button>
+    </header>
+    <div data-part="conversation-bar"><MessageSquare size={15}/>
+      <NativeSelect aria-label="Conversation" value={chat} disabled={busy||switching||offline} size="sm" onChange={e=>select(Number(e.target.value))}>
+        {(!chat||hasInitialDraft)&&<NativeSelectOption value={0}>New conversation</NativeSelectOption>}{settings?.chats.map(c=><NativeSelectOption key={c.id} value={c.id}>{c.title}</NativeSelectOption>)}</NativeSelect>
+      {canWriteChat&&<ProposalHistory ws={ws} openSource={source=>act(()=>open(source))}/>}
+      {!offline&&<AgentTasks ws={ws} write={write} disabled={busy} openResult={task=>{result.current=task.id;select(task.chat)}}/>}
+      {canWriteChat&&settings?.chats.find(item=>item.id===chat)?.canDelete&&<Dialog key={chat}><DialogTrigger asChild>
+        <Button size="icon-sm" variant="ghost" title="Delete conversation" aria-label="Delete conversation"><Trash2/></Button>
+      </DialogTrigger><DialogContent aria-describedby="delete-chat-detail"><DialogTitle>Delete this conversation?</DialogTitle>
+        <p id="delete-chat-detail">This removes the conversation and its pending edits for everyone in this workspace. Any running response will stop.</p>
+        <DialogFooter><DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose><DialogClose asChild><Button variant="destructive" onClick={()=>act(async()=>{
+          await json(path(chat)+suffix,'DELETE')
+          pendingTurns.current.delete(chat)
+          setDrafts(current=>{const {[chat]:removed,...rest}=current;return rest})
+          const data=await settingsNow()
+          if(selected.current===chat)select(data.chats[0]?.id??0)
+        })}>Delete conversation</Button></DialogClose></DialogFooter></DialogContent></Dialog>}
+      {write&&<Button size="icon-sm" variant="ghost" title="New chat" aria-label="New chat" disabled={busy||switching||offline} onClick={()=>act(newChat)}><Plus/></Button>}
+    </div>
+    <ScrollArea role="log" aria-label="Chat messages" className={LOG} ref={log} onClick={event=>{
+      if(event.defaultPrevented||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey||event.button!==0)return
+      const anchor=event.target instanceof Element?event.target.closest('[data-part=agent-markdown] a[href]'):null
+      const target=anchor instanceof HTMLAnchorElement&&!agentWebLink(anchor.getAttribute('href'),location.href)&&editorLinkTarget(anchor,ws)
+      if(target){event.preventDefault();act(()=>open(target))}
+    }} onScroll={e=>{const n=e.currentTarget;follow.current=n.scrollHeight-n.scrollTop-n.clientHeight<60}}>
+      {!offline&&!ready&&providerCard}
+      {ready&&!view.messages.length&&!busy&&canWriteChat&&<div data-part="start-chat">
+        <BookOpen size={26}/><h3>{surface==='canvas'?'Work with this canvas':page?'Work with this page':'Work with your pages'}</h3>
+        {(surface==='canvas'?['Describe this canvas','Suggest a layout']:page?['Summarize this page','Suggest a clearer introduction']:['Find a page about…','Compare two pages']).map(text=><Button variant="ghost" size="sm" key={text} onClick={()=>{updateDraft({text});composer.current?.focus()}}>{text}<ArrowUpRight size={14}/></Button>)}
       </div>}
       {view.messages.map(m=><article key={m.id} data-message={m.id} tabIndex={-1} data-author={m.role}>
-        <small data-part="author">{m.role==='assistant'?<><Layers size={13}/>Agent</>:(m.requestedBy||'User')}</small>
-        {m.text&&<p data-part="message">{m.text}</p>}
-        {m.status==='running'&&<small>Responding…</small>}{m.status==='interrupted'&&<small>Turn interrupted</small>}
+        <small data-part="author">{m.role==='assistant'?<><Layers size={13}/>Agent{(m.mode==='append'||m.mode==='full')&&<AgentModeBadge mode={m.mode}/>}</>:(m.requestedBy||'User')}</small>
+        {m.role==='assistant'?<AgentMessage message={m}/>:<p data-part="message">{m.text}</p>}
+        {m.status==='running'&&<small>{m.text||m.activity?.length?'Responding…':'Thinking…'}</small>}{m.status==='interrupted'&&<small>Turn interrupted</small>}
         {m.status==='unknown'&&<small>Turn outcome unknown after the host restarted. Check the saved proposals and their targets before starting another turn.</small>}
         {m.status==='cancelled'&&<small>Task cancelled</small>}
         {m.status==='failed'&&<small>Provider request failed. Check the connection settings.</small>}
         {m.pluginDraft&&<div role="group" aria-label={m.pluginDraft.name} className={REVIEW}>
-          <header><strong>{m.pluginDraft.name}</strong></header>
-          {Object.entries({'plugin.mjs':m.pluginDraft.nativeModule,'renderer.mjs':m.pluginDraft.rendererModule}).map(([name,source])=>source&&<details key={name}><summary>{name}</summary><pre>{source}</pre></details>)}
-          {settings?.canSavePlugin&&write&&<Button size="icon-sm" variant="ghost" aria-label="Save plugin folder" title="Save plugin folder" disabled={savingPlugin} onClick={()=>act(async()=>{
+          <header><strong data-copyable="">{m.pluginDraft.name}</strong></header>
+          {Object.entries({'plugin.mjs':m.pluginDraft.nativeModule,'renderer.mjs':m.pluginDraft.rendererModule}).map(([name,source])=>source&&<Disclosure key={name} label={name}><pre>{source}</pre></Disclosure>)}
+          {settings?.canSavePlugin&&canWriteChat&&<Button size="icon-sm" variant="ghost" aria-label="Save plugin folder" title="Save plugin folder" disabled={savingPlugin} onClick={()=>act(async()=>{
             setSavingPlugin(true)
             try{
               const saved=await json(path(chat)+'/plugins/'+m.id+'/save'+suffix,'POST',{})
@@ -217,72 +390,131 @@ export function AgentSidebar({destinationPath,openProject,downloadAttachment,ws,
             }finally{setSavingPlugin(false)}
           })}><Download/></Button>}
         </div>}
-        {!!m.sources.length&&<div data-part="sources">{m.sources.map(s=>s.attachment?<a key={'file/'+s.attachment.id} href={'/api/pages/'+s.id+'/files/'+s.attachment.id+'?workspace='+ws} download={s.attachment.name} title={s.attachment.excerpt} onClick={event=>{event.preventDefault();act(()=>downloadAttachment(s.id,s.attachment!))}}><FileText size={12}/>{s.title} · {s.attachment.name}</a>:<a key={s.id+'/'+(s.block??'')} href={sourceHref(ws,s)} onClick={e=>{if(e.metaKey||e.ctrlKey||e.shiftKey)return;e.preventDefault();act(()=>open(s))}}><FileText size={12}/>{s.excerpt?s.title+' · '+s.excerpt:s.title}</a>)}</div>}
+        {!!m.sources.length&&<div data-part="sources">{labeledCitations(m.sources).map(({item:s,label})=>s.attachment?<a key={'file/'+s.attachment.id} href={'/api/pages/'+s.id+'/files/'+s.attachment.id+'?workspace='+ws} download={s.attachment.name} title={s.attachment.excerpt} onClick={event=>{event.preventDefault();act(()=>downloadAttachment(s.id,s.attachment!))}}><FileText size={12}/>{label}</a>:<a key={s.id+'/'+(s.block??'')} href={sourceHref(ws,s)} onClick={e=>{if(e.metaKey||e.ctrlKey||e.shiftKey||e.altKey)return;e.preventDefault();act(()=>open(s))}}><FileText size={12}/>{label}</a>)}</div>}
         {view.pages?.filter(item=>item.message===m.id).map(item=>{
           const shown=item.status==='pending'?destinationPath(item.parent):item.reviewedPath??item.parentName
           return <section aria-label="New page proposal" className={REVIEW} key={'page-'+item.id}>
-          <header><FileText size={14}/><strong>{item.title}</strong><Badge variant="outline">{item.status==='pending'?'Review':item.status}{item.reviewedBy&&' by '+item.reviewedBy}</Badge></header>
+          <header><FileText size={14}/><strong data-copyable="">{item.title}</strong><Badge variant="outline">{item.status==='pending'?'Review':item.status}{item.reviewedBy&&' by '+item.reviewedBy}</Badge></header>
           <p><ReviewDestination id={item.parent} original={item.parentName} shown={shown}/></p>
           <pre>{item.markdown||'(empty page)'}</pre>
-          <footer>{item.page!==null&&<a href={'?workspace='+ws+'&page='+item.page} onClick={e=>{if(e.ctrlKey||e.metaKey||e.shiftKey||e.altKey)return;e.preventDefault();act(()=>open({id:item.page!,title:item.title}))}}>Open page<ArrowUpRight size={12}/></a>}
-          {write&&item.status==='pending'&&(['dismiss','apply'] as const).map(choice=><Button size="icon-sm" key={choice} disabled={choice==='apply'&&item.parent!==null&&shown===null} title={choice==='apply'?'Create page':'Dismiss page proposal'} aria-label={choice==='apply'?'Create page':'Dismiss page proposal'} onClick={()=>act(async()=>{
+          <footer>{item.page!==null&&<a href={'?workspace='+ws+'&page='+item.page} onClick={e=>{if(e.ctrlKey||e.metaKey||e.shiftKey||e.altKey)return;e.preventDefault();act(()=>open({id:item.page!}))}}>Open page<ArrowUpRight size={12}/></a>}
+          {canWriteChat&&item.status==='pending'&&(['dismiss','apply'] as const).map(choice=><Button size="icon-sm" key={choice} disabled={choice==='apply'&&item.parent!==null&&shown===null} title={choice==='apply'?'Create page':'Dismiss page proposal'} aria-label={choice==='apply'?'Create page':'Dismiss page proposal'} onClick={()=>act(async()=>{
             await submitReview('pages',item.id,choice,choice==='apply'?{reviewedPath:shown}:undefined)
           })}>{choice==='apply'?<Check/>:<X/>}</Button>)}</footer>
         </section>})}
         {view.projects.filter(item=>item.message===m.id).map(item=>{
           const shown=item.status==='pending'?destinationPath(item.parent):item.reviewedPath??item.parentName
           return <section aria-label="Project proposal" className={REVIEW} key={'project-'+item.id}>
-          <header>{item.beforeName?<Pencil size={14}/>:<FolderPlus size={14}/>}<strong>{item.beforeName?'Rename project':'Create '+item.name}</strong><Badge variant="outline">{item.status==='pending'?'Review':item.status}{item.reviewedBy&&' by '+item.reviewedBy}</Badge></header>
+          <header>{item.beforeName?<Pencil size={14}/>:<FolderPlus size={14}/>}<strong>{item.beforeName?'Rename project':<>Create <span data-copyable="">{item.name}</span></>}</strong><Badge variant="outline">{item.status==='pending'?'Review':item.status}{item.reviewedBy&&' by '+item.reviewedBy}</Badge></header>
           <p><ReviewDestination id={item.parent} original={item.parentName} shown={shown}/>{item.beforeName&&' · #'+item.project}</p>
           {item.beforeName&&<><del>{item.beforeName}</del><ins>{item.name}</ins></>}
           <footer>{item.project!==null&&<Button size="sm" variant="ghost" onClick={()=>act(()=>openProject(item.project!))}>Open project<ArrowUpRight size={12}/></Button>}
-          {write&&item.status==='pending'&&(['dismiss','apply'] as const).map(choice=><Button size="icon-sm" key={choice} disabled={choice==='apply'&&item.parent!==null&&shown===null} title={choice==='apply'?(item.beforeName?'Apply project rename':'Create project'):'Dismiss project proposal'} aria-label={choice==='apply'?(item.beforeName?'Apply project rename':'Create project'):'Dismiss project proposal'} onClick={()=>act(async()=>{
+          {canWriteChat&&item.status==='pending'&&(['dismiss','apply'] as const).map(choice=><Button size="icon-sm" key={choice} disabled={choice==='apply'&&item.parent!==null&&shown===null} title={choice==='apply'?(item.beforeName?'Apply project rename':'Create project'):'Dismiss project proposal'} aria-label={choice==='apply'?(item.beforeName?'Apply project rename':'Create project'):'Dismiss project proposal'} onClick={()=>act(async()=>{
             await submitReview('projects',item.id,choice,choice==='apply'?{reviewedPath:shown}:undefined)
           })}>{choice==='apply'?<Check/>:<X/>}</Button>)}</footer>
         </section>})}
-        {view.edits.filter(e=>e.message===m.id).map(edit=><section className={REVIEW} key={edit.id}>
-          <header><FileText size={14}/><strong>{edit.kind==='rename'?'Rename page':edit.title}</strong><Badge variant="outline">{edit.status==='pending'?'Review':edit.status}{edit.reviewedBy&&' by '+edit.reviewedBy}</Badge></header>
-          {edit.before&&<del>{edit.before}</del>}<ins>{edit.after||'(remove block text)'}</ins>
-          <footer><a href={'?workspace='+ws+'&page='+edit.page+(edit.block?'&block='+encodeURIComponent(edit.block):'')} onClick={e=>{if(e.metaKey||e.ctrlKey||e.shiftKey)return;e.preventDefault();act(()=>open({id:edit.page,title:edit.title,block:edit.block}))}}>Open page<ArrowUpRight size={12}/></a>
-          {edit.status==='pending'&&write&&<><Button size="icon-sm" aria-label="Dismiss" title="Dismiss edit" variant="ghost" onClick={()=>act(()=>decide(edit,'dismiss'))}><X/></Button><Button size="sm" onClick={()=>act(()=>decide(edit,'apply'))}><Check/>Apply</Button></>}</footer>
-        </section>)}</article>)}
-    </div>
+        {view.edits.filter(e=>e.message===m.id).map(edit=>{
+          const pending=edit.status==='pending'
+          const target=pageById.get(edit.page)
+          const rename=edit.kind==='rename'
+          const requestedBlock=edit.requestedBlock??(pending||edit.status==='dismissed'?edit.block:null)
+          const canvas=edit.kind==='canvas'
+          const action=canvas?(edit.after?(requestedBlock?'Edit canvas element':'Add canvas element'):'Remove canvas element'):rename?'Rename page':requestedBlock===null?'Paragraph edit':requestedBlock?'Replace block text':'Append paragraph'
+          const resultTitle=rename&&edit.status==='applied'?edit.after:edit.reviewedTitle??edit.title
+          const title=target?.title??resultTitle
+          const staleRename=pending&&rename&&target&&target.title!==edit.before
+          const source={id:edit.page,title,...(canvas?{surface:'canvas' as const}:{block:edit.block})}
+          return <section aria-label={action} className={REVIEW} key={edit.id}>
+            <header><FileText size={14}/><strong>{action}</strong><Badge variant="outline">{pending?'Review':edit.status}{edit.reviewedBy&&' by '+edit.reviewedBy}</Badge></header>
+            {pending&&target&&target.title!==edit.title&&<p>Requested for “{edit.title}”.{staleRename&&' Ask for a fresh rename.'}</p>}
+            {edit.status==='applied'&&target&&target.title!==resultTitle&&(edit.reviewedTitle!=null||rename)&&<p>Approved as “{resultTitle}”.</p>}
+            {edit.before&&<del>{canvas?canvasDescription(edit.before):edit.before}</del>}
+            {edit.after||!canvas?<ins>{canvas?canvasDescription(edit.after):edit.after||'(remove block text)'}</ins>:null}
+            <footer>{target?<a data-copyable="" href={sourceHref(ws,source)} onClick={e=>{if(e.metaKey||e.ctrlKey||e.shiftKey||e.altKey)return;e.preventDefault();act(()=>open(source))}}>{title} · #{edit.page}<ArrowUpRight size={12}/></a>:<span>{title} · #{edit.page} (unavailable)</span>}
+            {pending&&canWriteChat&&<><Button size="icon-sm" aria-label="Dismiss" title="Dismiss edit" variant="ghost" onClick={()=>act(()=>decide(edit,'dismiss'))}><X/></Button><Button size="sm" disabled={!target||!!staleRename} onClick={()=>act(()=>decide(edit,'apply',title))}><Check/>Apply</Button></>}</footer>
+          </section>})}</article>)}
+    </ScrollArea>
     <footer data-part="compose-area">
-    {error&&<Alert variant="destructive">{error}</Alert>}
+    {offline?<small role="status">{write?'Reconnect to send a message.':'Reconnect to load shared conversations.'}</small>:(error||refreshError)&&<ErrorAlert message={error||refreshError}/>}
     {notice&&<small role="status">{notice}</small>}
     {write?<form aria-label="Chat composer" ref={dropRef} data-part="composer" data-drag={isDropTarget?'over':dragging?'ready':'idle'} onSubmit={e=>{e.preventDefault();void send()}}>
-      <div data-part="context"><small>Context</small>{page&&<Badge variant="secondary" title={'Current document: '+page.title}><FileText size={12}/>{page.title}</Badge>}
-      {refs.map(s=><Button type="button" key={s.id} size="sm" variant="outline" disabled={busy} aria-label={'Remove '+s.title} onClick={()=>{attach(attachments.filter(id=>id!==s.id));N('Removed '+s.title)}}>{s.title}<X size={12}/></Button>)}
-      {blockLinks.map(s=><span data-part="block-link" key={s.id+'/'+s.block}>
-        <a href={'?workspace='+ws+'&page='+s.id+'&block='+encodeURIComponent(s.block)} title={s.title+' · '+s.excerpt} onClick={e=>{if(e.metaKey||e.ctrlKey||e.shiftKey)return;e.preventDefault();act(()=>open(s))}}><Link2 size={12}/>{s.excerpt}</a>
-        <Button type="button" size="icon-sm" variant="ghost" disabled={busy} aria-label={'Remove block link: '+s.excerpt} title="Remove block link" onClick={()=>setBlockLinks(blockLinks.filter(item=>item!==s))}><X size={12}/></Button>
-      </span>)}
-      {!page&&!blockLinks.length&&!refs.length&&<small>Workspace library</small>}</div>
-      <Textarea ref={composer} aria-label="Message the agent" placeholder={dragging?'Drop context here…':'Ask about your pages…'} rows={2} maxLength={12000} value={draft} onChange={e=>D(e.target.value)}/>
+      <span className="sr-only" role="status" aria-label="Attached context">
+        {attachments.length} {attachments.length===1?'page':'pages'} and {blockLinks.length} {blockLinks.length===1?'block link':'block links'} attached.
+      </span>
+      <ScrollArea data-part="context-scroll" aria-label="Message context"><div data-part="context"><small>Context</small>{page&&!attachedIds.has(page.id)&&<Badge variant="secondary" title={'Current document: '+pageLabel(page)}><FileText size={12}/>{pageLabel(page)}{surface==='canvas'?' · Canvas':''}</Badge>}
+      {attachments.map(attachment=>{
+        const available=pageById.get(attachment.id)
+        const source=available??attachment
+        const label=available?pageLabel(available):source.title+' · #'+source.id+' (unavailable)'
+        const current=source.id===page?.id
+        return <Button type="button" key={source.id} size="sm" variant={current?'secondary':'outline'} disabled={busy}
+          title={current?'Current document: '+label:'Remove '+label} aria-label={'Remove '+label}
+          aria-description={current?'Remove the attachment. The active document stays in context.':undefined}
+          onClick={()=>{
+            updateDraft({attachments:attachments.filter(item=>item.id!==source.id)})
+            N('');composer.current?.focus()
+          }}>{current&&<FileText size={12}/>}{label}<X size={12}/></Button>
+      })}
+      {draftLinks.map(({item:s,label:excerpt})=>{
+        const owner=pageById.get(s.id)
+        const unavailable=!owner||s.unavailable
+        const label=excerpt+(unavailable?' (unavailable)':'')
+        return <span data-part="block-link" data-qualified={excerpt!==s.excerpt||undefined} key={s.id+'/'+s.block}>
+          {unavailable?<span>{label}</span>:<a href={sourceHref(ws,s)} title={excerpt===s.excerpt?pageLabel(owner)+' · '+excerpt:excerpt} onClick={e=>{
+            if(e.metaKey||e.ctrlKey||e.shiftKey||e.altKey)return
+            e.preventDefault();act(()=>open(s))
+          }}><Link2 size={12}/><span>{excerpt}</span></a>}
+          <Button type="button" size="icon-sm" variant="ghost" disabled={busy} aria-label={'Remove block link: '+label} title={'Remove block link: '+label}
+            onClick={()=>{updateDraft({blockLinks:blockLinks.filter(item=>item!==s)});N('');composer.current?.focus()}}><X size={12}/></Button>
+        </span>
+      })}
+      {!page&&!blockLinks.length&&!attachments.length&&<small>Workspace library</small>}</div></ScrollArea>
+      {missingPage?<small role="status">Restore the unavailable page or remove its links before sending.</small>
+        :blockLinks.some(link=>link.unavailable)&&<small role="status">Restore the unavailable blocks and retry, or remove their links.</small>}
+      <Textarea ref={composer} aria-label="Message the agent" enterKeyHint="send" title="Enter sends. Shift+Enter, Alt+Enter, or Ctrl+Enter adds a new line."
+        placeholder={dragging?'Drop context here…':'Ask about your pages…'} rows={2} maxLength={12000} value={draft} onChange={e=>updateDraft({text:e.target.value})}
+        onKeyDown={event=>{
+          if(event.key!=='Enter'||event.nativeEvent.isComposing||event.nativeEvent.keyCode===229||event.metaKey)return
+          if(event.ctrlKey||event.altKey){
+            event.preventDefault()
+            // A native text edit preserves the selection, undo history, and textarea length limit.
+            event.currentTarget.ownerDocument.execCommand('insertText',false,'\n')
+          }else if(!event.shiftKey){
+            event.preventDefault()
+            if(!event.repeat)event.currentTarget.form?.requestSubmit()
+          }
+        }}/>
       <div data-part="compose-tools"><Popover open={picker} onOpenChange={P}><PopoverTrigger asChild>
         <Button type="button" size="icon-sm" variant="ghost" aria-label="Add page" disabled={busy} title="Add a page to this message"><Paperclip/></Button></PopoverTrigger>
-        <PopoverContent aria-label="Add page to context" align="start"><Input placeholder="Find a page…" aria-label="Find a page" value={filter} onChange={e=>Q(e.target.value)}/>
-        <div data-part="page-picker">{pages.filter(p=>p.title.toLowerCase().includes(filter.toLowerCase())).map(p=><Button key={p.id} type="button" size="sm" variant="ghost" disabled={p.id===page?.id||refs.some(s=>s.id===p.id)||refs.length>=3} onClick={()=>addPage(p.id)}><FileText/>{p.title}</Button>)}
-        {!pages.some(p=>p.title.toLowerCase().includes(filter.toLowerCase()))&&<small>No matching pages</small>}</div></PopoverContent></Popover>
-        <Button type="button" variant="ghost" size="icon-sm" aria-label="Run in background" aria-pressed={background} disabled={busy||running}
-          title="Run in background after closing this window" onClick={()=>setBackground(!background)}><Clock3/></Button>
-        <NativeSelect aria-label="Agent permissions" size="sm" disabled={busy} value={allowEdits?'suggest':'ask'} onChange={e=>{
-          const enabled=e.target.value==='suggest'
-          setAllowEdits(enabled);sessionStorage.setItem(permissionKey,String(enabled))
+        <PopoverContent data-part="destination-picker" aria-label="Add page to context" align="start" onCloseAutoFocus={event=>{
+          // A successful selection continues in the draft. Escape still returns to the picker trigger.
+          if(pickedPage.current){event.preventDefault();pickedPage.current=false;composer.current?.focus()}
         }}>
-          <NativeSelectOption value="ask">Ask only</NativeSelectOption><NativeSelectOption value="suggest">Suggest edits</NativeSelectOption>
-        </NativeSelect>
-        {busy?<Button type="button" size="icon-sm" aria-label="Stop response" title="Stop response" onClick={()=>active.current?.abort()}><Square/></Button>:<Button size="icon-sm" aria-label="Send" title="Send" disabled={switching||running||!draft.trim()||!ready}><ArrowUp/></Button>}</div>
+          <Command label="Find a page"><CommandInput placeholder="Find a page by title or ID…"/>
+            <ScrollArea data-part="destination-choices"><CommandList><CommandEmpty>No matching pages</CommandEmpty>
+              {pages.map(item=><CommandItem key={item.id} value={'#'+item.id} keywords={[item.title,pageLabel(item)]}
+                disabled={attachedIds.has(item.id)||attachments.length>=MAX_PAGE_REFERENCES}
+                title={item.id===page?.id?'Keep this page in context when switching documents':undefined}
+                onSelect={()=>addPage(item.id)}><FileText/><span>{pageLabel(item)}</span></CommandItem>)}
+            </CommandList></ScrollArea>
+          </Command></PopoverContent></Popover>
+        <Button type="button" variant="ghost" size="icon-sm" aria-label="Run in background" aria-pressed={background} disabled={busy||running}
+          title="Run in background after closing this window" onClick={()=>updateDraft({background:!background})}><Clock3/></Button>
+        <AgentModePicker mode={mode} disabled={busy} onChange={next=>{
+          setMode(next);sessionStorage.setItem(permissionKey,next)
+        }}/>
+        {busy?<Button type="button" size="icon-sm" aria-label="Stop response" title="Stop response" onClick={()=>active.current?.abort()}><Square/></Button>:<Button size="icon-sm" aria-label="Send" title="Send" disabled={offline||switching||running||missingPage||!draft.trim()||!ready}><ArrowUp/></Button>}</div>
     </form>:<small>Read-only conversation</small>}
     {settings&&ready&&write&&settings.localAgents.length>0?<div data-part="chat-provider"><Label htmlFor="chat-agent">Agent for this chat</Label>
-      <NativeSelect id="chat-agent" value={pinned??''} size="sm" disabled={busy||running||switching} onChange={event=>{
-        const agent=event.target.value||null
+      <NativeSelect id="chat-agent" value={pinned??''} size="sm" disabled={offline||busy||running||switching} onChange={event=>{
+        const agent=event.target.value as LocalAgent|''
         setSwitching(true)
         act(async()=>{
           try{
-            const id=chat||await newChat()
-            await json(path(id)+'/provider'+suffix,'POST',{agent})
-            await settingsNow()
+            if(chat){
+              await json(path(chat)+'/provider'+suffix,'POST',{agent:agent||null})
+              await settingsNow()
+            }else if(agent)await newChat(agent)
           }finally{setSwitching(false)}
         })
       }}>

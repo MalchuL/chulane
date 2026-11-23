@@ -1,0 +1,186 @@
+diff --git a/packages/react-rivto-editor/src/extensions/block-drag/types.ts b/packages/react-rivto-editor/src/extensions/block-drag/types.ts
+index 3be86078..bc9027fb 100644
+--- a/packages/react-rivto-editor/src/extensions/block-drag/types.ts
++++ b/packages/react-rivto-editor/src/extensions/block-drag/types.ts
+@@ -5,6 +5,7 @@ import type { CrossDocumentBlockPanel } from "./cross-document/panel";
+ 
+ /** Live receiving attachment using canonical Page geometry in either surface. */
+ export interface CrossDocumentPageRootController extends BlockDragTargetScope {
++  readonly documentIdentity: object | string;
+   readonly reactPanel: CrossDocumentBlockPanel;
+   readonly root: HTMLElement;
+   /**
+@@ -13,7 +14,7 @@ export interface CrossDocumentPageRootController extends BlockDragTargetScope {
+    * @param x - Viewport pointer X in CSS pixels.
+    * @param y - Viewport pointer Y in CSS pixels.
+    * @param sources - Live detached source roots, including selected subtrees not mounted.
+-   * @param sourceDocumentId - Actual source model identity used for same-document exclusion.
++   * @param sourceDocumentIdentity - Actual source model identity used for same-document exclusion.
+    * @param nativeHit - Optional current hit; omitted when the receiver must hit-test afresh.
+    * @returns Current canonical destination and feedback, or null outside an eligible destination.
+    */
+@@ -21,7 +22,7 @@ export interface CrossDocumentPageRootController extends BlockDragTargetScope {
+     x: number,
+     y: number,
+     sources: readonly Block[],
+-    sourceDocumentId: string,
++    sourceDocumentIdentity: object | string,
+     nativeHit?: Element,
+   ) => ResolvedBlockDropTarget | null;
+ }
+@@ -29,5 +30,7 @@ export interface CrossDocumentPageRootController extends BlockDragTargetScope {
+ /** Properties for the page drag-and-drop boundary. */
+ export interface PageDragExtensionOptions {
+   readonly children: ReactNode;
++  /** Shared by synchronously replicated views. Defaults to the editor's model object. */
++  readonly documentIdentity?: string;
+   readonly activationDistance?: number;
+ }
+diff --git a/packages/react-rivto-editor/src/surfaces/page/page-block-drag.ts b/packages/react-rivto-editor/src/surfaces/page/page-block-drag.ts
+index 16caa9fc..5dce912b 100644
+--- a/packages/react-rivto-editor/src/surfaces/page/page-block-drag.ts
++++ b/packages/react-rivto-editor/src/surfaces/page/page-block-drag.ts
+@@ -25,6 +25,7 @@ interface PagePreviewCursor {
+ interface PageBlockMove {
+   readonly targetId: string | null;
+   readonly receiver: CrossDocumentBlockPanel;
++  readonly sameDocument: boolean;
+   readonly position: "before" | "after" | "inside";
+ }
+ 
+@@ -37,7 +38,10 @@ export class PageBlockDrag implements BlockDragAdapter {
+    *
+    * @param panel - Source occurrence and bounded grouped commands.
+    */
+-  constructor(private readonly panel: CrossDocumentBlockPanel) {}
++  constructor(
++    private readonly panel: CrossDocumentBlockPanel,
++    private readonly documentIdentity: object | string = panel.document.getDocument(),
++  ) {}
+ 
+   /**
+    * Registers one receiving Page attachment shared by both surface implementations.
+@@ -51,7 +55,7 @@ export class PageBlockDrag implements BlockDragAdapter {
+     if (this.occurrence) {
+       throw new Error("Page drag is already attached");
+     }
+-    const occurrence = new PageDragOccurrence(this.panel, root, targets);
++    const occurrence = new PageDragOccurrence(this.panel, root, targets, this.documentIdentity);
+     this.occurrence = occurrence;
+     this.router = new BlockDragRouter(root, crossDocumentPageRootControllers, targets, this);
+     return () => {
+@@ -113,7 +117,7 @@ export class PageBlockDrag implements BlockDragAdapter {
+       x,
+       y,
+       sources,
+-      this.panel.document.getDocument().id,
++      this.documentIdentity,
+       hit,
+     );
+     return placement ?? undefined;
+@@ -202,7 +206,7 @@ export class PageBlockDrag implements BlockDragAdapter {
+     const receiver = move.receiver;
+     if (receiver === this.panel) {
+       this.panel.blocks.moveBlocks(ids, move.targetId, move.position);
+-    } else if (receiver.document.getDocument() === this.panel.document.getDocument()) {
++    } else if (move.sameDocument) {
+       this.panel.document.blocks.moveBlocks([...ids], move.targetId, move.position);
+     } else {
+       new CrossDocumentBlockTransfer(this.panel, receiver).move(ids, move);
+@@ -243,7 +247,7 @@ export class PageBlockDrag implements BlockDragAdapter {
+       return;
+     }
+     const receiver = entry?.reactPanel ?? this.panel;
+-    const sameDocument = receiver.document.getDocument() === this.panel.document.getDocument();
++    const sameDocument = !entry || entry.documentIdentity === this.documentIdentity;
+     const { blocks, rootBlockId } = receiver;
+     if (!ids.length || ids.some((id) => !this.panel.blocks.canRemove(id))) {
+       return;
+@@ -288,16 +292,16 @@ export class PageBlockDrag implements BlockDragAdapter {
+       return;
+     }
+     if (beforeId) {
+-      return { targetId: beforeId, position: "before", receiver };
++      return { targetId: beforeId, position: "before", receiver, sameDocument };
+     }
+     if (parent !== null) {
+-      return { targetId: parent, position: "inside", receiver };
++      return { targetId: parent, position: "inside", receiver, sameDocument };
+     }
+     const last = siblings.at(-1);
+     if (last) {
+-      return { targetId: last, position: "after", receiver };
++      return { targetId: last, position: "after", receiver, sameDocument };
+     }
+-    return sameDocument ? undefined : { targetId: null, position: "after", receiver };
++    return sameDocument ? undefined : { targetId: null, position: "after", receiver, sameDocument };
+   }
+ 
+   /**
+diff --git a/packages/react-rivto-editor/src/surfaces/page/page-drag-boundary.tsx b/packages/react-rivto-editor/src/surfaces/page/page-drag-boundary.tsx
+index 0d3f341a..97faa9ed 100644
+--- a/packages/react-rivto-editor/src/surfaces/page/page-drag-boundary.tsx
++++ b/packages/react-rivto-editor/src/surfaces/page/page-drag-boundary.tsx
+@@ -23,14 +23,14 @@ export interface PageDragBoundaryProps extends Omit<PageDragExtensionOptions, "c
+  * @param props.activationDistance - Pointer travel in CSS pixels before activation.
+  * @returns The same subtree with optional pointer dragging installed after commit.
+  */
+-export function PageDragBoundary({ children, activationDistance = 4 }: PageDragBoundaryProps) {
++export function PageDragBoundary({ children, activationDistance = 4, documentIdentity }: PageDragBoundaryProps) {
+   const { reactPanel } = useReactPanelContext();
+   const { element } = useEditorRoot();
+   useLayoutEffect(() => {
+     if (!element) {
+       return;
+     }
+-    const drag = new PageBlockDrag(reactPanel);
++    const drag = new PageBlockDrag(reactPanel, documentIdentity);
+     const detach = drag.attach(element, reactPanel.page.dropTargets);
+     try {
+       const stop = reactPanel.page.extensions.register(
+@@ -58,6 +58,6 @@ export function PageDragBoundary({ children, activationDistance = 4 }: PageDragB
+       }
+       throw error;
+     }
+-  }, [reactPanel, element, activationDistance]);
++  }, [reactPanel, element, activationDistance, documentIdentity]);
+   return <PageDragContext.Provider value={true}>{children}</PageDragContext.Provider>;
+ }
+diff --git a/packages/react-rivto-editor/src/surfaces/page/page-drag-occurrence.ts b/packages/react-rivto-editor/src/surfaces/page/page-drag-occurrence.ts
+index d0e33bf5..828d1519 100644
+--- a/packages/react-rivto-editor/src/surfaces/page/page-drag-occurrence.ts
++++ b/packages/react-rivto-editor/src/surfaces/page/page-drag-occurrence.ts
+@@ -24,6 +24,7 @@ export class PageDragOccurrence implements CrossDocumentPageRootController {
+     readonly reactPanel: CrossDocumentBlockPanel,
+     readonly root: HTMLElement,
+     readonly targets: Pick<BlockDropTargetsApi, "resolve">,
++    readonly documentIdentity: object | string = reactPanel.document.getDocument(),
+   ) {
+     this.receiver = new BlockDropReceiver(this, crossDocumentPageRootControllers);
+   }
+@@ -48,7 +49,7 @@ export class PageDragOccurrence implements CrossDocumentPageRootController {
+    * @param x - Viewport pointer X in CSS pixels.
+    * @param y - Viewport pointer Y in CSS pixels.
+    * @param sources - Live detached roots from the source occurrence.
+-   * @param sourceDocumentId - Source model identity, independent of DOM occurrence.
++   * @param sourceDocumentIdentity - Source model identity, independent of DOM occurrence.
+    * @param nativeHit - Optional current native hit from the source's resolution.
+    * @returns Current receiving placement, or null when detached, unavailable or forbidden.
+    */
+@@ -56,14 +57,14 @@ export class PageDragOccurrence implements CrossDocumentPageRootController {
+     x: number,
+     y: number,
+     sources: readonly EditorBlock[],
+-    sourceDocumentId: string,
++    sourceDocumentIdentity: object | string,
+     nativeHit?: Element,
+   ): ReturnType<CrossDocumentPageRootController["resolvePlacement"]> {
+     if (!this.receiver.active || !this.root.isConnected) {
+       return null;
+     }
+     const excluded =
+-      sourceDocumentId === this.reactPanel.document.getDocument().id
++      sourceDocumentIdentity === this.documentIdentity
+         ? new Set(sources.map(({ id }) => id))
+         : new Set<string>();
+     const accepts: BlockDropAcceptance = (destination) =>

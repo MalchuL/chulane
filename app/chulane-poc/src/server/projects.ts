@@ -1,5 +1,7 @@
 /** Project hierarchy and reversible subtree deletion in the workspace SQLite store. */
 import type {DatabaseSync} from 'node:sqlite'
+import {projectPaths,type Project} from '../shared/library.ts'
+import type {ProjectLookup} from '../shared/project-lookup.ts'
 import {alreadyApplied} from './metadata-receipts.ts'
 import {checkpointDrafts,type LiveDrafts} from './document-checkpoint.ts'
 
@@ -13,7 +15,8 @@ export function installProjects(db:DatabaseSync){
         ALTER TABLE pages ADD COLUMN projectTrash INTEGER REFERENCES projects(id);
         CREATE INDEX projects_parent ON projects(workspace,parent);`)
     }
-    db.exec(`CREATE TABLE IF NOT EXISTS page_move_conflicts(
+    db.exec(`CREATE INDEX IF NOT EXISTS projects_active_name ON projects(workspace,name) WHERE trashRoot IS NULL;
+      CREATE TABLE IF NOT EXISTS page_move_conflicts(
       id INTEGER PRIMARY KEY AUTOINCREMENT,page INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
       project INTEGER REFERENCES projects(id) ON DELETE CASCADE);
       CREATE UNIQUE INDEX IF NOT EXISTS page_move_destinations ON page_move_conflicts(page,COALESCE(project,0));
@@ -56,7 +59,7 @@ export function activeProject(db:DatabaseSync,workspace:number,id:unknown):numbe
 
 /** List the active hierarchy without including document contents in a tool response. */
 export function activeProjects(db:DatabaseSync,workspace:number){
-  return db.prepare('SELECT id,workspace,name,parent,trashRoot FROM projects WHERE workspace=? AND trashRoot IS NULL ORDER BY id').all(workspace)
+  return db.prepare('SELECT id,workspace,name,parent,trashRoot FROM projects WHERE workspace=? AND trashRoot IS NULL ORDER BY id').all(workspace) as (Project & {workspace:number})[]
 }
 
 /** Capture the destination shown to the reviewer, including ancestors with potentially repeated folder names. */
@@ -71,6 +74,31 @@ export function reviewProjectPath(db:DatabaseSync,workspace:number,project:numbe
   return String(entry.path)
 }
 
+/** Look up exact folder names by index, or search displayed paths in library navigation order. */
+export function findProjects(db:DatabaseSync,workspace:number,name:string,offset:number,match:ProjectLookup['match']='exact'){
+  if(match==='path'){
+    const query=name.trim().toLowerCase()
+    const entries:{id:number;name:string;path:string}[]=[]
+    let skipped=0
+    for(const {project,path} of projectPaths(activeProjects(db,workspace))){
+      if(!path.toLowerCase().includes(query))continue
+      if(skipped<offset){skipped++;continue}
+      if(entries.length===40)return {entries,nextOffset:offset+40}
+      entries.push({id:project.id,name:project.name,path})
+    }
+    return {entries,nextOffset:null}
+  }
+  const rows=db.prepare(`WITH RECURSIVE matches AS (
+    SELECT id,name,parent FROM projects WHERE workspace=? AND trashRoot IS NULL AND name=? ORDER BY id LIMIT 41 OFFSET ?
+  ), paths(id,name,parent,path) AS (
+    SELECT id,name,parent,name FROM matches
+    UNION ALL SELECT path.id,path.name,p.parent,p.name || ' / ' || path.path
+      FROM paths path JOIN projects p ON p.id=path.parent WHERE p.workspace=? AND p.trashRoot IS NULL
+  ) SELECT id,name,path FROM paths WHERE parent IS NULL ORDER BY id`).all(workspace,name,offset,workspace)
+  const entries=rows.slice(0,40).map(row=>({id:Number(row.id),name:String(row.name),path:String(row.path)}))
+  return {entries,nextOffset:rows.length>entries.length?offset+entries.length:null}
+}
+
 /** Bind approval to the displayed path of the stored folder ID, including any ancestor rename. */
 export function confirmProjectPath(db:DatabaseSync,workspace:number,project:number|null,original:string|null,input:unknown){
   const current=reviewProjectPath(db,workspace,project)
@@ -81,11 +109,12 @@ export function confirmProjectPath(db:DatabaseSync,workspace:number,project:numb
 
 type ProjectEntry={kind:'project'|'page';id:number;name:string}
 /** List immediate subprojects and writing pages, excluding journal days and trash, in bounded batches. */
-export function browseProject(db:DatabaseSync,workspace:number,parent:number|null,offset:number){
+export function browseProject(db:DatabaseSync,workspace:number,parent:number|null,offset:number,name:string|null=null){
   const project=activeProject(db,workspace,parent)
-  const rows=db.prepare(`SELECT 'project' AS kind,id,name FROM projects WHERE workspace=? AND parent IS ? AND trashRoot IS NULL
-    UNION ALL SELECT 'page',id,title FROM pages WHERE workspace=? AND project IS ? AND deleted=0 AND day IS NULL
-    ORDER BY kind DESC,name COLLATE NOCASE,id LIMIT 41 OFFSET ?`).all(workspace,project,workspace,project,offset) as ProjectEntry[]
+  if(name!==null&&(!name.trim()||name.length>250))throw Object.assign(Error('Supply a name between 1 and 250 characters.'),{status:400})
+  const rows=db.prepare(`SELECT 'project' AS kind,id,name FROM projects WHERE workspace=? AND parent IS ? AND trashRoot IS NULL AND (? IS NULL OR name=?)
+    UNION ALL SELECT 'page',id,title FROM pages WHERE workspace=? AND project IS ? AND deleted=0 AND day IS NULL AND (? IS NULL OR title=?)
+    ORDER BY kind DESC,name COLLATE NOCASE,id LIMIT 41 OFFSET ?`).all(workspace,project,name,name,workspace,project,name,name,offset) as ProjectEntry[]
   return {entries:rows.slice(0,40),nextOffset:rows.length>40?offset+40:null}
 }
 
@@ -131,37 +160,29 @@ export function createProject(db:DatabaseSync,workspace:number,name:unknown,pare
   return Number(db.prepare('INSERT INTO projects(workspace,name,parent) VALUES(?,?,?)').run(workspace,projectName(name),activeProject(db,workspace,parent)).lastInsertRowid)
 }
 
-/** Move a page by identity. Preserve a competing destination until an editor reviews the current placement. */
-export function movePage(db:DatabaseSync,workspace:number,page:number,destination:unknown,base:unknown,resolve:unknown,operationId?:unknown,fromReplica=false){
-  db.exec('BEGIN IMMEDIATE')
-  try{
-    const row=db.prepare('SELECT project,day,deleted FROM pages WHERE workspace=? AND id=?').get(workspace,page)
-    if(!row||row.deleted===2||(row.deleted&&!fromReplica))throw Object.assign(Error('Restore the page before moving it.'),{status:410})
-    if(row.day!==null)throw Object.assign(Error('Journal entries cannot be moved into projects.'),{status:400})
-    if(alreadyApplied(db,'page',page,operationId,{project:destination,baseProject:base,resolveMove:resolve})){
-      db.exec('COMMIT')
-      return
-    }
-    const trashedDestination=fromReplica&&typeof destination==='number'&&Number.isSafeInteger(destination)&&
-      db.prepare('SELECT 1 FROM projects WHERE workspace=? AND id=? AND trashRoot IS NOT NULL').get(workspace,destination)
-    const project=trashedDestination?destination:activeProject(db,workspace,destination)
-    if(base!==undefined&&base!==null&&(typeof base!=='number'||!Number.isSafeInteger(base)||
-      !db.prepare('SELECT 1 FROM projects WHERE workspace=? AND id=?').get(workspace,base)))
-      throw Object.assign(Error('Invalid original project.'),{status:400})
-    if(resolve!==undefined){
-      if(typeof resolve!=='number'||!Number.isSafeInteger(resolve)||base===undefined)throw Object.assign(Error('Invalid move resolution.'),{status:400})
-      const choice=db.prepare('SELECT project FROM page_move_conflicts WHERE id=? AND page=?').get(resolve,page)
-      if(!choice||row.project!==base)throw Object.assign(Error('The page location changed. Review the current choices.'),{status:409})
-      if(project!==row.project&&project!==choice.project)throw Object.assign(Error('Choose one of the reviewed locations.'),{status:400})
-      db.prepare('DELETE FROM page_move_conflicts WHERE id=?').run(resolve)
-    }
-    // Recovery must not move a page out of its trashed subtree or place an active page inside one.
-    if(!row.deleted&&!trashedDestination&&(base===undefined||base===row.project)){
-      db.prepare('UPDATE pages SET project=? WHERE id=?').run(project,page)
-      db.prepare('DELETE FROM page_move_conflicts WHERE page=? AND project IS ?').run(page,project)
-    }else if(project!==base&&project!==row.project){
-      db.prepare('INSERT INTO page_move_conflicts(page,project) VALUES(?,?) ON CONFLICT DO NOTHING').run(page,project)
-    }
-    db.exec('COMMIT')
-  }catch(error){db.exec('ROLLBACK');throw error}
+/** Move a page by identity inside the caller's transaction. Preserve a competing destination until an editor reviews the current placement. */
+export function movePage(db:DatabaseSync,workspace:number,page:number,destination:unknown,base:unknown,resolve:unknown,fromReplica=false){
+  const row=db.prepare('SELECT project,day,deleted FROM pages WHERE workspace=? AND id=?').get(workspace,page)
+  if(!row||row.deleted===2||(row.deleted&&!fromReplica))throw Object.assign(Error('Restore the page before moving it.'),{status:410})
+  if(row.day!==null)throw Object.assign(Error('Journal entries cannot be moved into projects.'),{status:400})
+  const trashedDestination=fromReplica&&typeof destination==='number'&&Number.isSafeInteger(destination)&&
+    db.prepare('SELECT 1 FROM projects WHERE workspace=? AND id=? AND trashRoot IS NOT NULL').get(workspace,destination)
+  const project=trashedDestination?destination:activeProject(db,workspace,destination)
+  if(base!==undefined&&base!==null&&(typeof base!=='number'||!Number.isSafeInteger(base)||
+    !db.prepare('SELECT 1 FROM projects WHERE workspace=? AND id=?').get(workspace,base)))
+    throw Object.assign(Error('Invalid original project.'),{status:400})
+  if(resolve!==undefined){
+    if(typeof resolve!=='number'||!Number.isSafeInteger(resolve)||base===undefined)throw Object.assign(Error('Invalid move resolution.'),{status:400})
+    const choice=db.prepare('SELECT project FROM page_move_conflicts WHERE id=? AND page=?').get(resolve,page)
+    if(!choice||row.project!==base)throw Object.assign(Error('The page location changed. Review the current choices.'),{status:409})
+    if(project!==row.project&&project!==choice.project)throw Object.assign(Error('Choose one of the reviewed locations.'),{status:400})
+    db.prepare('DELETE FROM page_move_conflicts WHERE id=?').run(resolve)
+  }
+  // Recovery must not move a page out of its trashed subtree or place an active page inside one.
+  if(!row.deleted&&!trashedDestination&&(base===undefined||base===row.project)){
+    db.prepare('UPDATE pages SET project=? WHERE id=?').run(project,page)
+    db.prepare('DELETE FROM page_move_conflicts WHERE page=? AND project IS ?').run(page,project)
+  }else if(project!==base&&project!==row.project){
+    db.prepare('INSERT INTO page_move_conflicts(page,project) VALUES(?,?) ON CONFLICT DO NOTHING').run(page,project)
+  }
 }

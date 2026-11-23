@@ -1,11 +1,13 @@
 /** Let named workspace owners inspect and update existing memberships through the authenticated host. */
+import {ScrollArea} from './ui/scroll-area'
+import {SettingsPanel} from './ui/settings-panel'
 import {useEffect,useState} from 'react'
 import {Users,UserMinus,UserPlus,Check,X} from 'lucide-react'
 import {memberRoles,type MemberRole,type WorkspaceInvitation,type WorkspaceCatalog,type WorkspaceMember} from '../shared/library'
 import {json} from './api'
-import {Button,Dialog,DialogContent,DialogTitle,DialogTrigger,Input,Label,NativeSelect,NativeSelectOption} from './ui'
+import {Button,Input,Label,NativeSelect,NativeSelectOption} from './ui'
 
-/** Keep the confirmation and roster local to the open dialog. The server enforces the owner invariant. */
+/** Keep the confirmation and roster local to the open panel. The server enforces the owner invariant. */
 function Roster({workspace,changed}:{workspace:number;changed:()=>Promise<unknown>}){
   const [offers,setOffers]=useState<{id:number;name:string;role:MemberRole}[]>([])
   const [username,setUsername]=useState(''),[offeredRole,setOfferedRole]=useState<MemberRole>('viewer')
@@ -37,10 +39,10 @@ function Roster({workspace,changed}:{workspace:number;changed:()=>Promise<unknow
     }catch(err){setError((err as Error).message)}
     finally{refresh(value=>value+1);setBusy(false)}
   }
-  async function changeOffer(id?:number){
+  async function changeOffer(id?:number,role?:MemberRole){
     setBusy(true);setError('')
     try{
-      if(id)await json(offersPath+'/'+id+suffix,'DELETE')
+      if(id)await json(offersPath+'/'+id+suffix,role?'PATCH':'DELETE',role?{role}:undefined)
       else{await json(offersPath+suffix,'POST',{username,role:offeredRole});setUsername('')}
     }catch(err){setError((err as Error).message)}
     finally{refresh(value=>value+1);setBusy(false)}
@@ -54,7 +56,10 @@ function Roster({workspace,changed}:{workspace:number;changed:()=>Promise<unknow
           {memberRoles.map(role=><NativeSelectOption key={role} value={role}>{role}</NativeSelectOption>)}</NativeSelect>
         <Button type="submit" size="icon-sm" disabled={busy||!username.trim()} aria-label="Send invitation" title="Send invitation"><UserPlus/></Button></div>
     </form>
-    {offers.map(offer=><div key={'offer'+offer.id}><strong>{offer.name}</strong><small>Invited · {offer.role}</small>
+    <ScrollArea role="region" aria-label="Members and invitations"><div data-part="member-list">{offers.map(offer=><div key={'offer'+offer.name}><strong>{offer.name}</strong><small>Invited</small>
+      <NativeSelect aria-label={'Invitation role for '+offer.name} value={offer.role} disabled={busy}
+        onChange={event=>void changeOffer(offer.id,event.target.value as MemberRole)}>
+        {memberRoles.map(role=><NativeSelectOption key={role} value={role}>{role}</NativeSelectOption>)}</NativeSelect>
       <Button size="icon-sm" variant="ghost" disabled={busy} aria-label={'Revoke invitation to '+offer.name} title="Revoke invitation" onClick={()=>void changeOffer(offer.id)}><X/></Button>
     </div>)}{members.map(member=>{
     const last=member.role==='owner'&&owners===1
@@ -64,13 +69,12 @@ function Roster({workspace,changed}:{workspace:number;changed:()=>Promise<unknow
       {confirm===member.id?<><Button size="sm" variant="destructive" disabled={busy||last} onClick={()=>void update(member,null)}>Remove {member.name}</Button>
         <Button size="sm" variant="ghost" disabled={busy} onClick={()=>setConfirm(undefined)}>Cancel</Button></>:
         <Button size="icon-sm" variant="ghost" disabled={busy||last} aria-label={'Remove '+member.name} title={last?'Assign another owner first':'Remove member'} onClick={()=>setConfirm(member.id)}><UserMinus/></Button>}
-    </div>})}{error&&<p role="alert">{error}</p>}</div>
+    </div>})}</div></ScrollArea>{error&&<p role="alert">{error}</p>}</div>
 }
 
 /** Load account names only when an owner opens member settings. */
 export function WorkspaceMembers({workspace,offline,changed}:{workspace:number;offline?:boolean;changed:()=>Promise<unknown>}){
-  return <Dialog><DialogTrigger asChild><Button variant="ghost" size="icon-sm" disabled={offline} aria-label="Manage members" title="Manage members"><Users/></Button></DialogTrigger>
-    <DialogContent aria-describedby={undefined}><DialogTitle>Workspace members</DialogTitle><Roster workspace={workspace} changed={changed}/></DialogContent></Dialog>
+  return <SettingsPanel title="Workspace members" trigger={<Button variant="ghost" size="icon-sm" disabled={offline} aria-label="Manage members" title="Manage members"><Users/></Button>}><Roster workspace={workspace} changed={changed}/></SettingsPanel>
 }
 
 /** Present active offers to the signed-in recipient, including accounts with no workspaces. */
@@ -81,14 +85,19 @@ export function WorkspaceInvitations({offers,changed}:{offers:WorkspaceInvitatio
     try{
       const catalog=await json('invitations/'+offer.id+'/'+(accept?'accept':'decline'),'POST')
       changed(catalog,accept?offer.workspace:undefined)
-    }catch(err){setError((err as Error).message)}
+    }catch(err){
+      if((err as {status?:number}).status===404){
+        setError('That invitation is no longer current. Review the available invitations.')
+        try{changed(await json('workspaces'))}catch(refreshError){setError((refreshError as Error).message)}
+      }else setError((err as Error).message)
+    }
     finally{setBusy(false)}
   }
   if(!offers.length)return null
   return <section aria-label="Workspace invitations" data-part="incoming-invitations">
-    <h2>Invitations</h2>{offers.map(offer=><div key={offer.id}><span>{offer.name} · {offer.role}</span>
-      <Button size="icon-sm" disabled={busy} title="Accept invitation" aria-label={'Accept invitation to '+offer.name} onClick={()=>void respond(offer,true)}><Check/></Button>
+    <h2>Invitations</h2><ScrollArea data-part="invitation-scroll" aria-label="Pending invitations">{offers.map(offer=><div key={offer.id} data-part="invitation-row"><span>{offer.name} · {offer.role}</span>
+      <Button size="icon-sm" disabled={busy} title="Accept invitation" aria-label={'Accept invitation to '+offer.name} aria-description={'Join as '+offer.role} onClick={()=>void respond(offer,true)}><Check/></Button>
       <Button size="icon-sm" variant="ghost" disabled={busy} title="Decline invitation" aria-label={'Decline invitation to '+offer.name} onClick={()=>void respond(offer,false)}><X/></Button>
-    </div>)}{error&&<p role="alert">{error}</p>}
+    </div>)}</ScrollArea>{error&&<p role="alert">{error}</p>}
   </section>
 }

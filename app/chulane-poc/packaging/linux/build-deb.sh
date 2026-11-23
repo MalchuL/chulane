@@ -22,7 +22,7 @@ rm "$runtime/resources/default_app.asar"
 cp -a dist "$app_dir/"
 mkdir "$app_dir/node_modules"
 cp -a dist-host/web-runtime/node_modules/{.pnpm,@mastra,zod} "$app_dir/node_modules/"
-cp dist-host/{desktop,preload}.cjs "$app_dir/dist-host/"
+cp dist-host/{desktop.cjs,preload.cjs,agent-link-preload.cjs,backup.mjs} "$app_dir/dist-host/"
 cat > "$app_dir/package.json" <<'JSON'
 {"name":"chulane-poc","productName":"Chulane POC","version":"0.0.0","main":"dist-host/desktop.cjs"}
 JSON

@@ -7,10 +7,14 @@ import {join} from 'node:path'
 export async function stageDesktopApp(stage,app,notices){
   await mkdir(join(app,'dist-host'),{recursive:true})
   await cp('dist',join(app,'dist'),{recursive:true})
-  for(const file of ['desktop.cjs','preload.cjs'])await cp('dist-host/'+file,join(app,'dist-host',file))
+  for(const file of ['desktop.cjs','preload.cjs','agent-link-preload.cjs','backup.mjs'])await cp('dist-host/'+file,join(app,'dist-host',file))
   // Mastra uses native ESM imports. Install its production graph as ordinary files in the installed app.
   const modules=join(stage,'providers')
-  execFileSync('pnpm',['--config.node-linker=hoisted','--config.inject-workspace-packages=true','--filter','@chulane/web-runtime','deploy','--prod',modules],{stdio:'inherit'})
+  // Windows npm installations expose pnpm as a command shim. Use the running package manager directly.
+  const pnpm=(process.env.npm_config_user_agent?.startsWith('pnpm/')&&process.env.npm_execpath)||'pnpm'
+  const deploy=['--config.node-linker=hoisted','--config.inject-workspace-packages=true','--filter','@chulane/web-runtime','deploy','--prod',modules]
+  if(/\.[cm]?js$/i.test(pnpm))execFileSync(process.execPath,[pnpm,...deploy],{stdio:'inherit'})
+  else execFileSync(pnpm,deploy,{stdio:'inherit'})
   const dependencies=join(modules,'node_modules')
   await mkdir(join(app,'node_modules'))
   for(const name of await readdir(dependencies)){

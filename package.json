@@ -3,6 +3,8 @@
   "private": true,
   "packageManager": "pnpm@11.8.0",
   "scripts": {
+    "setup:desktop": "git submodule update --init -- app/chulane-poc/vendor/rivto && pnpm --dir app/chulane-poc install --frozen-lockfile && pnpm --dir app/chulane-poc exec install-electron && pnpm --dir app/chulane-poc build",
+    "desktop": "pnpm --dir app/chulane-poc desktop",
     "build": "turbo run build",
     "dev": "turbo run dev",
     "lint": "turbo run lint",

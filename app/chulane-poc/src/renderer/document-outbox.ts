@@ -1,14 +1,14 @@
-/** Persist unsent Yjs snapshots, page moves and ordered page or project renames in IndexedDB under their authenticated workspace replica. */
+/** Persist unsent Yjs snapshots, ordered page-tag, link, move and rename requests in IndexedDB under their authenticated workspace replica. */
 import * as Y from 'yjs'
 import {YjsDoc} from '@chulane/crdt-doc'
 import {DocumentModelImpl} from '@chulane/document-model'
-import type {Library} from '../shared/library'
+import type {Library,PageLink,TagApplication} from '../shared/library'
 import {exportMarkdown} from '../shared/markdown-export'
 import {initialJournalState} from '../shared/journal-state'
 import {request} from './api'
 
 type WritingBlock={content?:unknown;children?:WritingBlock[]}
-/** Match the search projection sent by Rivto's foreground and background checkpoints. */
+/** Collect writing in document order for the local catalog and recovery exports. */
 export function writingText(blocks:WritingBlock[]):string{
   const parts:string[]=[]
   function visit(items:WritingBlock[]){
@@ -24,7 +24,10 @@ export function writingText(blocks:WritingBlock[]):string{
 type PendingDocument={writer:string;source:string;title?:string;version:number;state:Uint8Array}
 type Rename={baseTitle:string;title:string}
 type Move={baseProject:number|null;project:number|null;pageTitle:string}
-type QueuedMetadata={sequence:number;source:string;operationId:string} & (Rename|Move)
+type LinkChange={linkTarget:number;linked:boolean;pageTitle:string}
+type PageTagChange={tag:number;tagName:string;active:boolean;pageTitle:string}
+export type MetadataChange=Rename|Move|LinkChange|PageTagChange
+type QueuedMetadata={sequence:number;source:string;operationId:string} & MetadataChange
 type Receipt=Pick<PendingDocument,'writer'|'version'>
 let opening:Promise<IDBDatabase>|undefined
 
@@ -84,15 +87,22 @@ export function metadataOperationId(){return Array.from(crypto.getRandomValues(n
 export function projectRenameKey(id:number){return 'project:'+id}
 
 /** Commit the observed and requested metadata together before acknowledging a local change. */
-export async function queueMetadata(replica:string,target:number|string,change:Rename|Move,operationId=metadataOperationId()){
+export async function queueMetadata(replica:string,target:number|string,change:MetadataChange,operationId=metadataOperationId()){
   const db=await database(),tx=db.transaction('renames','readwrite',{durability:'strict'})
   tx.objectStore('renames').add({source:replica+'/'+target,operationId,...change})
-  await committed(tx)
+  // Capture the committed view before another window can acknowledge and remove this operation.
+  const rows=await readMetadata(tx,descendants(replica))
+  return (library:Library)=>applyMetadata(library,replica,rows)
 }
 
 /** Read metadata in insertion order within the requested scope, without reading document bodies. */
 async function queuedMetadata(query:IDBKeyRange|string){
-  const db=await database(),tx=db.transaction('renames','readonly')
+  const db=await database()
+  return readMetadata(db.transaction('renames','readonly'),query)
+}
+
+/** Read within the caller's transaction so an enqueue and its catalog projection share the same revision. */
+async function readMetadata(tx:IDBTransaction,query:IDBKeyRange|string){
   const rows=tx.objectStore('renames').index('source').getAll(query)
   await committed(tx)
   return (rows.result as QueuedMetadata[]).sort((a,b)=>a.sequence-b.sequence)
@@ -109,10 +119,10 @@ export function localJournalDay(id:number):string|undefined{
 }
 
 /** Retain the initial day in the same durable queue as its edits, including when the user leaves it blank. */
-async function localDays(lib:Library,replica:string){
+async function localDays(lib:Library,replica:string,ensureToday:boolean){
   const ids=(await documentSources(replica)).map(source=>Number(source.slice(replica.length+1))).filter(id=>id<0)
   const today=-Number(lib.today.replaceAll('-',''))
-  if(!lib.pages.some(page=>page.day===lib.today)&&!lib.removedPages?.some(page=>page.day===lib.today)&&!ids.includes(today)){
+  if(ensureToday&&!lib.pages.some(page=>page.day===lib.today)&&!lib.removedPages?.some(page=>page.day===lib.today)&&!ids.includes(today)){
     const box=await documentOutbox(replica,today)
     if(!box.recovered.length)await box.save(0,initialJournalState(lib.today),lib.today)
     ids.push(today)
@@ -123,20 +133,44 @@ async function localDays(lib:Library,replica:string){
   })
 }
 
-/** Project queued names and page locations onto the authorized library, leaving the server cache canonical. */
+/** Project queued links, names and page locations onto the authorized library, leaving the server cache canonical. */
 export async function withPendingLibrary(lib:Library,journal:boolean){
   const replica=lib.replica
   if(!replica||lib.role!=='editor')return lib
-  if(journal&&lib.offline)lib={...lib,localJournalDays:await localDays(lib,replica)}
-  const rows=await queuedMetadata(descendants(replica))
-  if(!rows.length)return lib
+  if(lib.offline)lib={...lib,localJournalDays:await localDays(lib,replica,journal)}
+  return applyMetadata(lib,replica,await queuedMetadata(descendants(replica)))
+}
+
+/** Project committed metadata without replacing a newer view or crossing an account or permission change. */
+function applyMetadata(lib:Library,replica:string,rows:QueuedMetadata[]):Library{
+  if(!rows.length||lib.replica!==replica||lib.role!=='editor'||(lib.pendingMetadataRevision??0)>rows.at(-1)!.sequence)return lib
   const titles=new Map<string,string>(),moves=new Map<string,number|null>()
+  let links:Map<string,PageLink>|undefined
+  let pageTags:Map<string,TagApplication>|undefined
   for(const row of rows){
-    if('baseProject' in row)moves.set(row.source,row.project)
+    if('linkTarget' in row){
+      const source=Number(row.source.slice(replica.length+1)),target=row.linkTarget
+      links??=new Map(lib.links.map(link=>[link.source+'/'+link.target,link]))
+      const key=source+'/'+target
+      if(row.linked)links.set(key,{source,target})
+      else links.delete(key)
+    }else if('tag' in row){
+      pageTags??=new Map(lib.applications.filter(item=>!item.block).map(item=>[item.page+'/'+item.tag,item]))
+      const page=Number(row.source.slice(replica.length+1)),key=page+'/'+row.tag
+      if(row.active)pageTags.set(key,{page,tag:row.tag,block:''})
+      else pageTags.delete(key)
+    }else if('baseProject' in row)moves.set(row.source,row.project)
     else titles.set(row.source,row.title)
   }
   const activeProjects=new Set(lib.projects.filter(project=>project.trashRoot===null).map(project=>project.id))
-  return {...lib,pendingRename:rows.at(-1)!.sequence,
+  const pageIds=new Set(lib.pages.map(page=>page.id))
+  let applications=lib.applications
+  if(pageTags){
+    const tags=new Set(lib.tags.filter(tag=>!tag.deleted).map(tag=>tag.id))
+    const pages=new Set(lib.pages.filter(page=>!page.deleted).map(page=>page.id))
+    applications=[...applications.filter(item=>item.block),...Array.from(pageTags.values()).filter(item=>tags.has(item.tag)&&pages.has(item.page))]
+  }
+  return {...lib,applications,links:links?Array.from(links.values()).filter(link=>pageIds.has(link.source)&&pageIds.has(link.target)):lib.links,pendingMetadataRevision:rows.at(-1)!.sequence,
     // Conflict choices must use server names once the queued renames for that item have settled.
     projects:lib.projects.map(project=>({...project,name:titles.get(replica+'/'+projectRenameKey(project.id))??project.name})),
     projectNameConflicts:lib.projectNameConflicts?.filter(conflict=>!titles.has(replica+'/'+projectRenameKey(conflict.project))),
@@ -161,11 +195,20 @@ export async function replayMetadata(replica:string,workspace:number,signal:Abor
       if(allowed&&!allowed.has(target))continue
       const project=target.startsWith('project:')
       const path=project?'projects/'+target.slice('project:'.length):'pages/'+target
-      const change='baseProject' in row?{baseProject:row.baseProject,project:row.project}
-        :project?{baseName:row.baseTitle,name:row.title}:{baseTitle:row.baseTitle,title:row.title}
-      await request(path+'?workspace='+workspace,{method:'PATCH',signal,
-        headers:{'Content-Type':'application/json','X-Chulane-Replica':deliveryReplica},
-        body:JSON.stringify({operationId:row.operationId,...change})})
+      if('linkTarget' in row){
+        await request(path+'/links/'+row.linkTarget+'?workspace='+workspace,{method:row.linked?'PUT':'DELETE',signal,
+          headers:{'Idempotency-Key':row.operationId,'X-Chulane-Replica':deliveryReplica}})
+      }else if('tag' in row){
+        await request(path+'/tags?workspace='+workspace,{method:'PUT',signal,
+          headers:{'Content-Type':'application/json','X-Chulane-Replica':deliveryReplica},
+          body:JSON.stringify({tag:row.tag,active:row.active,block:'',operationId:row.operationId})})
+      }else{
+        const change='baseProject' in row?{baseProject:row.baseProject,project:row.project}
+          :project?{baseName:row.baseTitle,name:row.title}:{baseTitle:row.baseTitle,title:row.title}
+        await request(path+'?workspace='+workspace,{method:'PATCH',signal,
+          headers:{'Content-Type':'application/json','X-Chulane-Replica':deliveryReplica},
+          body:JSON.stringify({operationId:row.operationId,...change})})
+      }
       const tx=db.transaction('renames','readwrite',{durability:'strict'})
       tx.objectStore('renames').delete(row.sequence)
       await committed(tx)
@@ -184,11 +227,16 @@ async function documentSources(scope:string){
   return sources
 }
 
-/** List pending projects and pages once, including pages with both body and title changes. */
-export async function pendingSources(scope:string){
+/** Distinguish recoverable writing from metadata-only changes without loading any document bodies. */
+export async function pendingSourceContents(scope:string){
   const [documents,titles]=await Promise.all([documentSources(scope),queuedMetadata(descendants(scope))])
-  return [...new Set([...documents,...titles.map(row=>row.source)])]
+  const hasWriting=new Map(documents.map(source=>[source,true]))
+  for(const row of titles)if(!hasWriting.has(row.source))hasWriting.set(row.source,false)
+  return hasWriting
 }
+
+/** List pending projects and pages once, including pages with both body and title changes. */
+export async function pendingSources(scope:string){return [...(await pendingSourceContents(scope)).keys()]}
 
 /** Identify pending body edits separately from metadata-only changes, and prefer the latest queued title. */
 export async function pendingRecoveryInfo(source:string){
@@ -196,15 +244,15 @@ export async function pendingRecoveryInfo(source:string){
   const row=tx.objectStore('drafts').index('source').get(source)
   await committed(tx)
   const latest=(await queuedMetadata(source)).at(-1)
-  const title:string|undefined=latest?('baseProject' in latest?latest.pageTitle:latest.title):row.result?.title
+  const title:string|undefined=latest?('pageTitle' in latest?latest.pageTitle:latest.title):row.result?.title
   return {title,hasDocument:!!row.result}
 }
 
-/** Merge only the outstanding local writers so recovery still works after workspace cache removal. */
-export async function pendingMarkdown(replica:string,page:number){
-  const {recovered}=await documentOutbox(replica,page)
-  if(!recovered.length)throw Error('No pending document content remains to export.')
-  return exportMarkdown(Y.mergeUpdates(recovered.map(row=>row.state)),'',false)
+/** Recover writing from device snapshots, including a journal day's edits made before it acquired a server ID. */
+export async function recoveryMarkdown(replica:string,page:number,copy?:Pick<RetiredCopy,'state'|'day'>){
+  const {states}=await recoveryUpdates(replica,recoveryIds(page,copy?.day),copy?.state)
+  if(!states.length)throw Error('No document content remains on this device to export.')
+  return exportMarkdown(Y.mergeUpdates(states),'',false)
 }
 
 /** Encode bytes for a portable recovery file without expanding them into a JavaScript argument list. */
@@ -228,30 +276,38 @@ export async function exportProjectRenames(profile:string,workspace:number,proje
 type RetiredCopy={day:string|null;title?:string;state?:Uint8Array;attachments:{id:number;name:string;base64:string}[]}
 
 /** A provisional calendar day and its eventual server ID can both own undelivered writers. */
-function recoveryIds(page:number,day?:string|null){return day?[page,-Number(day.replaceAll('-',''))]:[page]}
+export function recoveryIds(page:number,day?:string|null){return day?[page,-Number(day.replaceAll('-',''))]:[page]}
+
+/** Include the cached base and all pending writers for both identities of a journal day. */
+async function recoveryUpdates(replica:string,ids:number[],base?:Uint8Array){
+  const boxes=await Promise.all(ids.map(id=>documentOutbox(replica,id)))
+  const writers=boxes.flatMap(box=>box.recovered)
+  const states=writers.map(row=>row.state)
+  if(base?.length)states.unshift(base)
+  return {states,title:writers.find(row=>row.title)?.title}
+}
 
 /** Export the synchronized base, outstanding edits and locally available files together. Keep all originals. */
 export async function exportPendingDocument(profile:string,workspace:number,page:number,replica=profile+'/'+workspace,copy?:RetiredCopy){
   const ids=recoveryIds(page,copy?.day)
-  const boxes=await Promise.all(ids.map(id=>documentOutbox(replica,id)))
-  const writers=boxes.flatMap(box=>box.recovered)
+  const {states,title}=await recoveryUpdates(replica,ids,copy?.state)
   const changes=(await Promise.all(ids.map(id=>queuedMetadata(replica+'/'+id)))).flat()
   const renames=changes.flatMap(row=>'baseTitle' in row?[{baseTitle:row.baseTitle,title:row.title,operationId:row.operationId}]:[])
   const moves=changes.flatMap(row=>'baseProject' in row?[{baseProject:row.baseProject,project:row.project,operationId:row.operationId}]:[])
-  const base={version:1,server:location.origin,profile,workspace,page,renames,...(moves.length&&{moves})}
-  if(!writers.length&&!copy){
+  const links=changes.flatMap(row=>'linkTarget' in row?[{target:row.linkTarget,linked:row.linked,operationId:row.operationId}]:[])
+  const tags=changes.flatMap(row=>'tag' in row?[{tag:row.tag,name:row.tagName,active:row.active,operationId:row.operationId}]:[])
+  const base={version:1,server:location.origin,profile,workspace,page,renames,...(tags.length&&{tags}),...(moves.length&&{moves}),...(links.length&&{links})}
+  if(!states.length&&!copy){
     if(!changes.length)throw Error('These edits have already synced.')
-    return new Blob([JSON.stringify({format:moves.length?'chulane-page-metadata-recovery':'chulane-title-recovery',...base},null,2)],{type:'application/json'})
+    return new Blob([JSON.stringify({format:moves.length||links.length||tags.length?'chulane-page-metadata-recovery':'chulane-title-recovery',...base},null,2)],{type:'application/json'})
   }
-  const states=writers.map(row=>row.state)
-  if(copy?.state)states.unshift(copy.state)
   const state=Y.mergeUpdates(states),doc=new Y.Doc()
   Y.applyUpdate(doc,state)
   const model=new DocumentModelImpl(new YjsDoc(String(page),doc))
   try{
     const encoded=await recoveryBase64(new Blob([state as BlobPart]))
     return new Blob([JSON.stringify({format:'chulane-document-recovery',...base,
-      journalDay:copy?.day??localJournalDay(page),title:renames.at(-1)?.title??writers.find(row=>row.title)?.title??copy?.title,
+      journalDay:copy?.day??localJournalDay(page),title:renames.at(-1)?.title??title??copy?.title,
       writingText:writingText(model.blocks.getBlocks()),yjsUpdateBase64:encoded,attachments:copy?.attachments},null,2)],{type:'application/json'})
   }finally{model.destroy()}
 }
@@ -284,15 +340,11 @@ export async function replayClosedDocuments(replica:string,workspace:number,elig
     try{
       const head=await request(path,{headers,signal})
       if(head.headers.has('X-Chulane-Offline'))throw Error('Server unavailable. Edits remain on this device.')
-      const bytes=new Uint8Array(await head.arrayBuffer()),doc=new Y.Doc()
-      const model=new DocumentModelImpl(new YjsDoc(String(id),doc))
-      try{
-        if(bytes.length)Y.applyUpdate(doc,bytes)
-        for(const row of box.recovered)Y.applyUpdate(doc,row.state)
-        const plain=new TextEncoder().encode(writingText(model.blocks.getBlocks()))
-        const frame=new Blob([plain,Y.encodeStateAsUpdate(doc) as BlobPart])
-        await request(path,{method:'PUT',signal,headers:{...headers,'X-Text-Bytes':String(plain.length),'If-Match':head.headers.get('X-Revision')!},body:frame})
-      }finally{model.destroy()}
+      const bytes=new Uint8Array(await head.arrayBuffer())
+      const updates=box.recovered.map(row=>row.state)
+      const state=Y.mergeUpdates(bytes.length?[bytes,...updates]:updates)
+      await request(path,{method:'PUT',signal,headers:{...headers,'Content-Type':'application/octet-stream',
+        'If-Match':head.headers.get('X-Revision')!},body:new Blob([state as BlobPart])})
     }catch(error){
       if((error as {status?:number}).status!==410)throw error
       // A trashed page cannot be opened. Send the queued CRDT states for a server-side merge that keeps it in Trash.

@@ -1,13 +1,14 @@
 /** Exercises real HTTP, role enforcement, revision conflicts, attachments and a cold backup restore. */
 import test from 'node:test'
 import {once} from 'node:events'
-import {execFile} from 'node:child_process'
+import {execFile,spawnSync} from 'node:child_process'
 import {promisify} from 'node:util'
 import assert from 'node:assert/strict'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {mkdtemp,copyFile,rm,mkdir,readdir,writeFile,readFile} from 'node:fs/promises'
 import * as Y from 'yjs'
+import type {TagTable} from '../../src/shared/tag-fields.ts'
 import {serve} from '../../src/server/service.ts'
 test('role boundary, journal uniqueness, binary document and attachment survive cold restore',async t=>{
   const dir=await mkdtemp(join(tmpdir(),'chulane-test-'))
@@ -35,6 +36,9 @@ test('role boundary, journal uniqueness, binary document and attachment survive 
   for(const invalid of ['','.', '..','nested/name','broken\0suffix','x'.repeat(256)]){
     assert.equal((await call(p+'/files?name='+encodeURIComponent(invalid),'POST',Buffer.from([1]))).status,400)
   }
+  const oversized=await call(p+'/files?name=oversize.bin','PUT',Buffer.alloc(16*1024*1024+1),{'Idempotency-Key':'a'.repeat(32)})
+  assert.equal(oversized.status,413)
+  assert.match((await oversized.json()).error,/16 MiB/)
   const {id:target}=await(await post('pages',{title:'Source material'})).json()
   const renamePath='pages/'+target
   const draftTitle={baseTitle:'Source material',title:'Field analysis',operationId:'a'.repeat(32)}
@@ -43,9 +47,21 @@ test('role boundary, journal uniqueness, binary document and attachment survive 
   const [titleConflict]=(await(await call('library')).json()).titleConflicts
   const keepTitle=JSON.stringify({baseTitle:'Survey data',resolveTitle:titleConflict.id,title:'Survey data'})
   const link=p+'/links/'+target
+  const receipt={'Idempotency-Key':'c'.repeat(32)}
+  assert.equal((await call(link,'PUT',undefined,receipt)).status,200)
+  assert.equal((await call(link,'DELETE')).status,200)
+  assert.equal((await call(link,'PUT',undefined,receipt)).status,200)
+  assert.deepEqual((await(await call('library')).json()).links,[])
+  assert.equal((await call(link,'DELETE',undefined,receipt)).status,409)
   assert.equal((await call(link,'PUT')).status,200)
   const {id:tag}=await(await post('tags',{name:'Reference'})).json()
   const assignment=JSON.stringify({tag,block:'',active:true})
+  const taggedOnce=JSON.stringify({tag,block:'',active:true,operationId:'d'.repeat(32)})
+  assert.equal((await call(p+'/tags','PUT',taggedOnce)).status,200)
+  assert.equal((await call(p+'/tags','PUT',JSON.stringify({tag,block:'',active:false}))).status,200)
+  assert.equal((await call(p+'/tags','PUT',taggedOnce)).status,200)
+  assert.deepEqual((await(await call('library')).json()).applications,[])
+  assert.equal((await call(p+'/tags','PUT',JSON.stringify({tag,block:'',active:false,operationId:'d'.repeat(32)}))).status,409)
   assert.equal((await call(p+'/tags','PUT',assignment)).status,200)
   const fieldPath='tags/'+tag+'/fields'
   const {id:field}=await(await post(fieldPath,{name:'Reviewed',kind:'checkbox'})).json()
@@ -53,6 +69,14 @@ test('role boundary, journal uniqueness, binary document and attachment survive 
   assert.equal((await call(cell,'PUT',checked)).status,200)
   const exported=await(await call(p+'/markdown')).json()
   assert.ok(exported.omitted.includes('tag field values'))
+  assert.match(exported.markdown,/## Attachments/)
+  assert.ok(!exported.markdown.includes('/api/pages/'))
+  const portable=await(await call(p+'/markdown?origin='+encodeURIComponent(host.url))).json()
+  const fileUrl=host.url+'/api/'+p+'/files/'+fileId+'?workspace=1'
+  assert.ok(portable.markdown.includes(fileUrl))
+  assert.ok(portable.omitted.includes('attachments'))
+  assert.equal((await fetch(fileUrl)).status,401)
+  assert.deepEqual(Buffer.from(await(await fetch(fileUrl,{headers:{Cookie:cookie}})).arrayBuffer()),Buffer.from([0,255]))
   assert.ok(!(await(await call(renamePath+'/markdown')).json()).omitted.includes('tag field values'))
   const edit={block:'',before:'',after:'Append after restore'}
   const queued=await(await post('proposals',{page:target,edit})).json()
@@ -155,6 +179,61 @@ test('restore and administrator bootstrap leave incompatible database files unto
   assert.deepEqual(await readdir(dir),['workspace.sqlite'])
 })
 
+test('an operator can provision an ordinary account while public registration stays closed',async t=>{
+  const dir=await mkdtemp(join(tmpdir(),'chulane-provision-'))
+  t.after(()=>rm(dir,{recursive:true,force:true}))
+  const password='a private test password'
+  const provision=(command:string,name:string,input=password)=>spawnSync(process.execPath,['--import','tsx','src/server/main.ts',command,name],{
+    input,encoding:'utf8',timeout:5000,env:{...process.env,CHULANE_DATA:dir,PORT:'0'}
+  })
+  const first=provision('create-user','Reader')
+  assert.match(first.stderr,/Create a server administrator first/)
+  assert.equal(first.status,1)
+  assert.equal(provision('create-admin','Operator').status,0)
+  const host=await serve({file:join(dir,'workspace.sqlite'),assets:dir})
+  t.after(()=>host.close())
+  const created=provision('create-user','Reader')
+  assert.equal(created.status,0,created.stderr)
+  assert.match(provision('create-user','READER','a different test password').stderr,/Username unavailable/)
+  const post=(path:string,username:string)=>fetch(host.url+'/api/'+path,{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password})})
+  assert.equal((await post('register','Stranger')).status,403)
+  const login=await post('login','reader')
+  assert.equal(login.status,200)
+  const headers={Cookie:login.headers.get('set-cookie')!.split(';')[0]}
+  const catalog=await(await fetch(host.url+'/api/workspaces',{headers})).json()
+  assert.equal((await fetch(host.url+'/api/server/settings',{headers})).status,403)
+  assert.deepEqual(catalog.workspaces,[])
+})
+
+test('terminal bootstrap retries a mismatch and never echoes the administrator password',{skip:process.platform!=='linux'},async t=>{
+  const dir=await mkdtemp(join(tmpdir(),'chulane-terminal-bootstrap-'))
+  t.after(()=>rm(dir,{recursive:true,force:true}))
+  const password='synthetic-terminal-password'
+  // util-linux script provides a real TTY for the CLI's hidden input flow.
+  const child=execFile('script',['-qefc','node --import tsx src/server/main.ts create-admin Operator','/dev/null'],
+    {env:{...process.env,CHULANE_DATA:dir},timeout:15000})
+  const closed=once(child,'close')
+  const steps=[['Administrator password',password],['Confirm password','incorrect-confirmation'],
+    ['Passwords differ',null],['Administrator password',password],['Confirm password',password]] as const
+  let step=0,cursor=0,output=''
+  child.stdout!.on('data',chunk=>{
+    output+=chunk
+    while(step<steps.length){
+      const [prompt,reply]=steps[step]
+      const index=output.indexOf(prompt,cursor)
+      if(index<0)break
+      cursor=index+prompt.length
+      step++
+      if(reply!==null)child.stdin!.write(reply+'\r')
+    }
+  })
+  assert.equal((await closed)[0],0)
+  assert.equal(step,steps.length)
+  assert.match(output,/Server administrator created/)
+  assert.ok(!output.includes(password)&&!output.includes('incorrect-confirmation'))
+})
+
 test('legacy flat projects remain navigable across migration, subtree trash and cold restart',async t=>{
   const {DatabaseSync}=await import('node:sqlite')
   const dir=await mkdtemp(join(tmpdir(),'chulane-project-upgrade-')),file=join(dir,'workspace.sqlite')
@@ -179,7 +258,7 @@ test('legacy flat projects remain navigable across migration, subtree trash and 
   async function login(){cookie=(await call('login','POST',{key:'edit'})).headers.get('set-cookie')!.split(';')[0]}
   await login()
   const marked=new DatabaseSync(file,{readOnly:true})
-  try{assert.equal(marked.prepare('PRAGMA user_version').get()!.user_version,2)}finally{marked.close()}
+  try{assert.equal(marked.prepare('PRAGMA user_version').get()!.user_version,6)}finally{marked.close()}
   const upgraded=await(await call('library')).json()
   assert.deepEqual((await(await call('agent')).json()).chats,[{id:5,title:'Old conversation',canDelete:true}])
   const [legacy]=(await(await call('proposals/history')).json()).items
@@ -239,6 +318,67 @@ test('opening a fresh local profile leaves workspace creation to its owner acros
   assert.deepEqual((await(await call('workspaces')).json()).workspaces,[{id,name:'My research',timeZone:'Europe/London'}])
 })
 
+test('portable snapshots reject unreadable page states and live drafts that need a missing base',async t=>{
+  const {DatabaseSync}=await import('node:sqlite')
+  const dir=await mkdtemp(join(tmpdir(),'chulane-snapshot-state-')),source=join(dir,'workspace.sqlite')
+  t.after(()=>rm(dir,{recursive:true,force:true}))
+  const host=await serve({file:source,assets:dir,editorKey:'edit'})
+  await host.close()
+  const db=new DatabaseSync(source)
+  t.after(()=>db.close())
+  db.exec("INSERT INTO workspaces(id,name) VALUES(1,'Library'); INSERT INTO pages(id,workspace,title) VALUES(2,1,'Notes')")
+  const cli=(...args:string[])=>promisify(execFile)(process.execPath,['src/tools/backup.ts',...args])
+  db.prepare('UPDATE pages SET state=? WHERE id=2').run(Uint8Array.of(255))
+  await assert.rejects(cli('--verify',source),/Invalid document state in pages for page 2/)
+  await assert.rejects(cli(source,join(dir,'bad.sqlite')),/Invalid document state in pages for page 2/)
+  const doc=new Y.Doc()
+  const text=doc.getText('observations')
+  text.insert(0,'Survey')
+  const base=Y.encodeStateVector(doc)
+  db.prepare('UPDATE pages SET state=? WHERE id=2').run(Y.encodeStateAsUpdate(doc))
+  text.delete(0,1)
+  db.prepare("INSERT INTO live_document_drafts(page,state,plain) VALUES(2,?,'urvey')").run(Y.encodeStateAsUpdate(doc,base))
+  doc.destroy()
+  await assert.rejects(cli('--restore',source,join(dir,'restored')),/Invalid document state in live_document_drafts for page 2/)
+  assert.ok(!(await readdir(dir)).some(name=>name==='restored'||name==='bad.sqlite'))
+})
+
+test('incomplete stamped databases fail verification, restore and startup before missing data can be recreated',async t=>{
+  const {DatabaseSync}=await import('node:sqlite')
+  const dir=await mkdtemp(join(tmpdir(),'chulane-incomplete-')),source=join(dir,'workspace.sqlite')
+  t.after(()=>rm(dir,{recursive:true,force:true}))
+  const host=await serve({file:source,assets:dir,editorKey:'edit'})
+  await host.close()
+  const backup=(...args:string[])=>promisify(execFile)(process.execPath,['src/tools/backup.ts',...args])
+  const file=join(dir,'candidate.sqlite')
+  for(const [sql,reason] of [
+    ['PRAGMA user_version=0',/Unrecognized workspace database format/],
+    ['DROP TABLE files',/Missing workspace table: files/],
+    ['DROP TABLE creation_receipts',/Missing workspace table: creation_receipts/],
+    ['DROP TABLE tag_values',/Missing workspace table: tag_values/],
+    ['DROP TABLE chat_edits',/Missing workspace table: chat_edits/],
+    ['ALTER TABLE chat_messages RENAME COLUMN sources TO old_sources',/Missing workspace column: chat_messages.sources/],
+    ['DROP TABLE workspace_invitations',/Missing workspace table: workspace_invitations/],
+    ['ALTER TABLE memberships RENAME COLUMN role TO old_role',/Missing workspace column: memberships.role/],
+    ['DELETE FROM installation',/Missing Chulane installation identity/],
+    ["UPDATE installation SET identity='invalid'",/Invalid Chulane installation identity/],
+  ] as const){
+    await copyFile(source,file)
+    const db=new DatabaseSync(file)
+    try{db.exec('PRAGMA journal_mode=DELETE');db.exec(sql)}finally{db.close()}
+    const before=await readFile(file)
+    await assert.rejects(backup('--verify',file),reason)
+    await assert.rejects(backup(file,join(dir,'snapshot')),reason)
+    await assert.rejects(backup('--restore',file,join(dir,'restored')),reason)
+    await assert.rejects(async()=>{
+      const unexpected=await serve({file,assets:dir,editorKey:'edit'})
+      await unexpected.close()
+    },reason)
+    assert.deepEqual(await readFile(file),before)
+    assert.deepEqual((await readdir(dir)).sort(),['candidate.sqlite','workspace.sqlite'])
+  }
+})
+
 test('workspace backup restores credentials, settings and membership without device credentials',async t=>{
   const dir=await mkdtemp(join(tmpdir(),'chulane-accounts-'))
   const open=(file:string,registration:boolean)=>serve({file:join(dir,file),assets:dir,registration,editorKey:'shared'})
@@ -265,7 +405,12 @@ test('workspace backup restores credentials, settings and membership without dev
   assert.equal((await(await call(shared,'library?workspace='+legacy)).json()).replica,undefined)
   const mismatched=await fetch(host.url+'/api/pages/1/state?workspace='+id,{method:'PUT',headers:{Cookie:writer,'X-Chulane-Replica':original+'-different'},body:'stale replica'})
   assert.equal(mismatched.status,403)
-  await call(writer,'pages?workspace='+id,{title:'Private draft'})
+  const scope='?workspace='+id
+  const page=(await(await call(writer,'pages'+scope,{title:'Private draft'})).json()).id
+  const tag=(await(await call(writer,'tags'+scope,{name:'Survey'})).json()).id
+  const field=(await(await call(writer,'tags/'+tag+'/fields'+scope,{name:'Count',kind:'number'})).json()).id
+  assert.equal((await call(writer,'pages/'+page+'/tags'+scope,{tag,block:'',active:true},'PUT')).status,200)
+  assert.equal((await call(writer,'tags/'+tag+'/fields/'+field+'/value'+scope,{page,block:'',value:7},'PUT')).status,200)
   assert.equal((await call(writer,'workspaces?workspace='+id,{timeZone:'Europe/London'},'PATCH')).status,200)
   for(const cookie of [other,shared]){
     for(const path of ['library','agent','pages/1/state','source?id=1','search?q=Private']){
@@ -287,7 +432,7 @@ test('workspace backup restores credentials, settings and membership without dev
   assert.deepEqual(await readdir(backupDir),['workspace.sqlite'])
   const verify=(file:string)=>promisify(execFile)(process.execPath,[command[0]!, '--verify',file])
   const bytes=await readFile(destination)
-  assert.match((await verify(destination)).stdout,/Verified Chulane workspace format 2/)
+  assert.match((await verify(destination)).stdout,/Verified Chulane workspace format 6/)
   assert.deepEqual(await readFile(destination),bytes)
   const damaged=join(dir,'damaged.sqlite')
   await copyFile(destination,damaged)
@@ -300,11 +445,28 @@ test('workspace backup restores credentials, settings and membership without dev
   const db=new DatabaseSync(damaged)
   try{db.exec('PRAGMA foreign_keys=OFF; UPDATE workspace_invitations SET account=-1')}finally{db.close()}
   await assert.rejects(verify(damaged),/foreign key.*workspace_invitations/i)
+  const partial=join(dir,'partial.sqlite')
+  const incomplete=new DatabaseSync(partial)
+  try{incomplete.exec("PRAGMA application_id=0x43484c4e; PRAGMA user_version=2; CREATE TABLE installation(id INTEGER PRIMARY KEY,identity TEXT); INSERT INTO installation VALUES(1,'test')")}finally{incomplete.close()}
+  await assert.rejects(verify(partial),/Missing workspace table: workspaces/)
+
+  const copy=(...args:string[])=>promisify(execFile)(process.execPath,[command[0]!,...args])
+  const rejected=join(dir,'invalid-backup.sqlite'),restoredDir=join(dir,'restored-deployment')
+  await assert.rejects(copy(damaged,rejected),/foreign key.*workspace_invitations/i)
+  await assert.rejects(copy('--restore',damaged,restoredDir),/foreign key.*workspace_invitations/i)
+  assert.ok(!(await readdir(dir)).includes('invalid-backup.sqlite'))
+  assert.ok(!(await readdir(dir)).includes('restored-deployment'))
+  await copy('--restore',destination,restoredDir)
+  assert.deepEqual(await readdir(restoredDir),['workspace.sqlite'])
+  const restoredBytes=await readFile(join(restoredDir,'workspace.sqlite'))
+  await assert.rejects(copy('--restore',destination,restoredDir),/exist/i)
+  assert.deepEqual(await readFile(join(restoredDir,'workspace.sqlite')),restoredBytes)
+
   await writeFile(damaged,bytes.subarray(0,100))
   await assert.rejects(verify(damaged))
   // A later write to the original installation cannot change the published snapshot.
   await call(writer,'workspaces/archive?workspace='+id,{archived:false},'PUT')
-  await host.close();host=await open('restore/workspace.sqlite',false)
+  await host.close();host=await open('restored-deployment/workspace.sqlite',false)
   assert.equal((await call(writer,'workspaces')).status,401)
   assert.equal((await call('','register',{...credentials,username:'Closed'})).status,403)
   assert.equal((await call('','login',{...credentials,password:'wrong'})).status,403)
@@ -312,6 +474,9 @@ test('workspace backup restores credentials, settings and membership without dev
   assert.equal((await(await call(restored,'workspaces')).json()).archivedWorkspaces[0].id,id)
   await call(restored,'workspaces/archive?workspace='+id,{archived:false},'PUT')
   const lib=await(await call(restored,'library?workspace='+id)).json()
+  const table:TagTable=await(await call(restored,'tags/'+tag+'/table'+scope)).json()
+  assert.equal(table.fields.find(item=>item.id===field)?.name,'Count')
+  assert.equal(table.rows.find(item=>item.id===page&&!item.block)?.values[field],7)
   assert.equal(lib.replica,original)
   assert.equal(lib.owner,true);assert.equal(lib.pages[0].title,'Private draft')
   assert.equal(lib.workspaces[0].timeZone,'Europe/London')
@@ -344,6 +509,23 @@ test('trashed document replay is bound to the editing replica and survives a hos
   const {id}=await(await call('pages/import-markdown',owner,'POST',{title:'Log',content:'Server entry'})).json()
   const replica=(await(await call('library',owner)).json()).replica
   const readerReplica=(await(await call('library',viewer)).json()).replica
+  const {id:destination}=await(await call('pages',owner,'POST',{title:'Destination'})).json()
+  const {id:tag}=await(await call('tags',owner,'POST',{name:'Surveyed'})).json()
+  const assignment='pages/'+id+'/tags',fields='tags/'+tag+'/fields'
+  const assigned={tag,block:'',active:true}
+  const receipt='a'.repeat(32)
+  const replayTag=(cookie:string,replica:string,data={...assigned,operationId:receipt})=>fetch(host.url+'/api/'+assignment,{method:'PUT',
+    headers:{Cookie:cookie,'Content-Type':'application/json','X-Chulane-Replica':replica},body:JSON.stringify(data)})
+  assert.equal((await call(assignment,owner,'PUT',assigned)).status,200)
+  const {id:field}=await(await call(fields,owner,'POST',{name:'Verified',kind:'checkbox'})).json()
+  assert.equal((await call(fields+'/'+field+'/value',owner,'PUT',{page:id,block:'',value:false})).status,200)
+  assert.equal((await call(assignment,owner,'PUT',{...assigned,active:false})).status,200)
+  const snapshot=async(cookie:string)=>(await(await call('library?includeTagFields=1',cookie)).json()).tagFields.cells
+  assert.deepEqual(await snapshot(owner),[{tag,page:id,block:'',field,value:false}])
+  assert.deepEqual(await snapshot(viewer),[])
+  const linkPath='pages/'+id+'/links/'+destination
+  const replayLink=(cookie:string,source:string,operationId:string)=>fetch(host.url+'/api/'+linkPath,{method:'PUT',
+    headers:{Cookie:cookie,'X-Chulane-Replica':source,'Idempotency-Key':operationId}})
   const update=Buffer.from(importMarkdown('Device entry'))
   const replay=(cookie:string,source:string,body=update)=>fetch(host.url+'/api/pages/'+id+'/state?workspace=1&merge=1',{method:'POST',headers:{Cookie:cookie,'X-Chulane-Replica':source},body})
   assert.equal((await replay(owner,replica)).status,409)
@@ -351,6 +533,16 @@ test('trashed document replay is bound to the editing replica and survives a hos
   const titleReplay=(cookie:string,source:string,title:string,operationId:string)=>fetch(host.url+'/api/pages/'+id+'?workspace=1',{method:'PATCH',
     headers:{Cookie:cookie,'Content-Type':'application/json','X-Chulane-Replica':source},body:JSON.stringify({title,baseTitle:'Log',operationId})})
   assert.equal((await call('pages/'+id,owner,'PATCH',{title:'Direct rename'})).status,410)
+  assert.equal((await call(linkPath,owner,'PUT')).status,410)
+  assert.equal((await call(assignment,owner,'PUT',assigned)).status,404)
+  assert.equal((await replayTag(viewer,readerReplica)).status,403)
+  assert.equal((await replayTag(owner,readerReplica)).status,403)
+  assert.equal((await call('tags/'+tag,owner,'PATCH',{deleted:true})).status,200)
+  assert.equal((await replayTag(owner,replica)).status,200)
+  assert.equal((await call('tags/'+tag+'/table',owner)).status,410)
+  assert.equal((await replayLink(viewer,readerReplica,'8'.repeat(32))).status,403)
+  assert.equal((await replayLink(owner,readerReplica,'8'.repeat(32))).status,403)
+  assert.equal((await replayLink(owner,replica,'8'.repeat(32))).status,200)
   assert.equal((await titleReplay(viewer,readerReplica,'Device title','1'.repeat(32))).status,403)
   assert.equal((await titleReplay(owner,readerReplica,'Device title','1'.repeat(32))).status,403)
   assert.equal((await titleReplay(owner,replica,'Device title','1'.repeat(32))).status,200)
@@ -367,6 +559,18 @@ test('trashed document replay is bound to the editing replica and survives a hos
   assert.equal(restored.title,'Device title')
   const library=await(await call('library',owner)).json()
   assert.deepEqual(library.titleConflicts.map(item=>item.title),['Concurrent title'])
+  assert.deepEqual(library.links,[{source:id,target:destination}])
+  assert.deepEqual(library.applications,[])
+  await call('tags/'+tag,owner,'PATCH',{deleted:false})
+  const table=async()=>(await(await call('tags/'+tag+'/table',owner)).json()).rows
+  assert.equal((await table())[0].values[field],false)
+  await call(assignment,owner,'PUT',{...assigned,active:false})
+  assert.equal((await replayTag(owner,replica)).status,200)
+  assert.deepEqual(await table(),[])
+  await call('pages/'+destination,owner,'PATCH',{deleted:true})
+  await call('pages/'+destination,owner,'DELETE')
+  assert.equal((await replayLink(owner,replica,'9'.repeat(32))).status,200)
+  assert.deepEqual((await(await call('library',owner)).json()).links,[])
   assert.equal((await titleReplay(owner,replica,'Device title','1'.repeat(32))).status,200)
   assert.deepEqual(restored.text.split('\n').sort(),['Device entry','Server entry'])
   const {id:project}=await(await call('projects',owner,'POST',{name:'Research'})).json()
@@ -402,6 +606,7 @@ test('trashed document replay is bound to the editing replica and survives a hos
   await call('pages/'+id,owner,'PATCH',{deleted:true})
   assert.equal((await call('pages/'+id,owner,'DELETE')).status,200)
   assert.equal((await titleReplay(owner,replica,'Device title','1'.repeat(32))).status,410)
+  assert.equal((await replayTag(owner,replica)).status,410)
 })
 
 test('workspace owners manage current members and concurrent removals preserve an owner',async t=>{
@@ -416,7 +621,8 @@ test('workspace owners manage current members and concurrent removals preserve a
     return response.headers.get('set-cookie')!.split(';')[0]
   }
   const owner=await register('Owner'),guest=await register('Guest'),outsider=await register('Outsider')
-  await call(owner,'workspaces','POST',{name:'Field station'})
+  const operationId='a'.repeat(32)
+  await call(owner,'workspaces','POST',{name:'Field station',operationId})
   // Invitation acceptance is independent of maintaining an established membership.
   const db=new DatabaseSync(file)
   db.exec("INSERT INTO memberships SELECT 1,id,'viewer' FROM accounts WHERE name='Guest'")
@@ -434,7 +640,8 @@ test('workspace owners manage current members and concurrent removals preserve a
   assert.equal((await change(owner,ownerId,'editor')).status,409)
   assert.equal((await call(owner,path+'/'+ownerId,'DELETE')).status,409)
   assert.equal((await change(owner,guestId,'editor')).status,200)
-  assert.equal((await call(guest,'pages','POST',{title:'Field notes'})).status,200)
+  const draft={title:'Field notes',operationId}
+  assert.equal((await call(guest,'pages','POST',draft)).status,200)
   const env={...process.env,CHULANE_PROFILE_STATION_URL:host.url,CHULANE_PROFILE_STATION_USERNAME:'Guest',CHULANE_PROFILE_STATION_PASSWORD:'membership fixture password'}
   const cli=(...args:string[])=>promisify(execFile)(process.execPath,['src/tools/cli.ts','--profile','station',...args],{env})
   const invalidProfile=(overrides:NodeJS.ProcessEnv)=>promisify(execFile)(process.execPath,['src/tools/cli.ts','--profile','station','workspaces'],{env:{...env,...overrides}})
@@ -447,6 +654,14 @@ test('workspace owners manage current members and concurrent removals preserve a
   await call(owner,'projects','POST',{name:'Notes'})
   const listing=JSON.parse((await cli('browse',String(folder))).stdout)
   assert.deepEqual(listing,{entries:[{kind:'project',id:nested,name:'Notes'}],nextOffset:null})
+  assert.deepEqual(JSON.parse((await cli('browse',String(folder),'0','Notes')).stdout),listing)
+  assert.deepEqual(JSON.parse((await cli('browse',String(folder),'0','notes')).stdout),{entries:[],nextOffset:null})
+  const found=JSON.parse((await cli('find_projects','Notes')).stdout)
+  assert.deepEqual(found.entries.map(entry=>entry.path),['Station / Notes','Notes'])
+  assert.equal(found.entries[0].id,nested)
+  assert.equal(found.entries[0].url,host.url+'/?workspace=1&project='+nested)
+  assert.deepEqual(JSON.parse((await cli('find_projects','TION / no','0','path')).stdout).entries,[found.entries[0]])
+  await assert.rejects(cli('find_projects','Notes','bad'),/Use find_projects/)
   const markdown='Readings\n\nWind from the east.'
   const {pending}=JSON.parse((await cli('propose_draft',String(listing.entries[0].id),'New field notebook',markdown)).stdout)
   const [proposal]=(await(await call(owner,'library')).json()).proposals
@@ -455,7 +670,7 @@ test('workspace owners manage current members and concurrent removals preserve a
   assert.equal(proposal.profile,'station')
   assert.equal((await change(guest,ownerId,'viewer')).status,403)
   assert.equal((await change(owner,guestId,'viewer')).status,200)
-  assert.equal((await call(guest,'pages','POST',{title:'Blocked'})).status,403)
+  assert.equal((await call(guest,'pages','POST',draft)).status,403)
   assert.equal((await call(guest,'projects/'+folder,'PATCH',{name:'Blocked',baseName:'Station'})).status,403)
   assert.equal((await call(outsider,'projects/browse')).status,404)
   assert.deepEqual(JSON.parse((await cli('browse')).stdout).entries.map(item=>item.name),['Notes','Station','Field notes'])
@@ -518,6 +733,11 @@ test('the bootstrapped server administrator controls registration independently 
   assert.equal((await call('server/settings',admin,{registration:false},'PATCH')).status,200)
   assert.equal((await call('register','',{username:'Late',password})).status,403)
   await call('server/settings',admin,{registration:true},'PATCH')
+  assert.equal((await(await call('library?workspace='+id,member)).json()).presence,true)
+  assert.equal((await call('server/settings',member,{presence:false},'PATCH')).status,403)
+  assert.equal((await call('server/settings',admin,{presence:'no'},'PATCH')).status,400)
+  assert.equal((await(await call('server/settings',admin,{presence:false},'PATCH')).json()).presence,false)
+  assert.equal((await(await call('library?workspace='+id,member)).json()).presence,undefined)
   const providerPath='server/provider',secret='unpublished-fixture-key'
   const {createServer}=await import('node:http')
   let authorization='',usedModel=''
@@ -558,7 +778,7 @@ test('the bootstrapped server administrator controls registration independently 
   await promisify(execFile)(process.execPath,[join(process.cwd(),'src/tools/backup.ts'),file,restored])
   await host.close();host=await serve({file:restored,assets:dir})
   assert.equal((await(await call('auth')).json()).registration,true)
-  assert.equal((await call('server/settings',await login('Root'))).status,200)
+  assert.equal((await(await call('server/settings',await login('Root'))).json()).presence,false)
   assert.equal((await call('server/settings',await login('Member'))).status,403)
   assert.ok(!(await readFile(restored)).includes(Buffer.from(secret)))
   const clean=await(await call(providerPath,await login('Root'))).json()
@@ -633,7 +853,20 @@ test('username invitations survive restart and grant the offered role only on ac
   assert.equal((await api('invitations/'+withdrawn.id+'/accept',guest,'POST')).status,404)
   const sent=await invite()
   assert.equal(sent.status,200)
-  const {id}=await sent.json()
+  const {id:initialId}=await sent.json()
+  const revise=(id:number,role:string,cookie=owner)=>api('workspaces/invitations/'+id+'?workspace='+ws,cookie,'PATCH',{role})
+  assert.equal((await revise(initialId,'invalid')).status,400)
+  assert.equal((await revise(initialId,'editor',stranger)).status,404)
+  const promoted=await revise(initialId,'editor')
+  assert.equal(promoted.status,200)
+  const promotedId=(await promoted.json()).id
+  assert.notEqual(promotedId,initialId)
+  assert.equal((await api('invitations/'+initialId+'/accept',guest,'POST')).status,404)
+  assert.equal((await revise(initialId,'owner')).status,404)
+  const revised=await revise(promotedId,'viewer')
+  const {id}=await revised.json()
+  assert.equal((await api('invitations/'+promotedId+'/accept',guest,'POST')).status,404)
+  assert.equal((await(await revise(id,'viewer')).json()).id,id)
   assert.equal((await invite()).status,409)
   assert.equal((await api('library?workspace='+ws,guest)).status,404)
   const unrelated=(await(await api('workspaces',stranger,'POST',{name:'Other workspace'})).json()).id
@@ -650,6 +883,7 @@ test('username invitations survive restart and grant the offered role only on ac
   assert.equal((await api('invitations/'+id+'/accept',guest,'POST')).status,404)
   await api('workspaces/archive?workspace='+ws,owner,'PUT',{archived:false})
   assert.equal((await api('invitations/'+id+'/accept',guest,'POST')).status,200)
+  assert.equal((await revise(id,'owner')).status,404)
   assert.equal((await(await api('library?workspace='+ws,guest)).json()).role,'viewer')
   assert.equal((await api('pages?workspace='+ws,guest,'POST',{title:'Forbidden'})).status,403)
   const journal=await(await api('library?view=journal&workspace='+ws,guest)).json()
