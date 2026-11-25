@@ -12,6 +12,7 @@ import {
 } from '@chulane/rivto-react'
 import '@chulane/rivto-react/styles.css'
 import {Button,ToggleGroup,ToggleGroupItem} from './ui'
+import {GlassSurface} from './ui/glass-surface'
 import {mountPluginBlocks} from './plugin-blocks'
 import {DocumentTextSelection} from './document-text-selection'
 import {remarkNamedReferences} from '../shared/named-references'
@@ -37,7 +38,7 @@ type EditorRuntime={reactEditor:ReturnType<typeof createReactEditor>;mode:ModeMa
 
 function Surface({writable,save,toolbar,page,checkpoint}:{page:number;checkpoint:()=>Promise<void>;toolbar?:HTMLDivElement|null;writable:boolean;save:React.ReactNode}){
   const {mode,setMode}=useEditorMode()
-  return <>{toolbar&&createPortal(<div className="editor-controls"><ToggleGroup className="surface-tabs" type="single" size="sm" value={mode} aria-label="Document view" onValueChange={next=>{if(next==='block'||next==='edgeless')setMode(next)}}><ToggleGroupItem value="block" aria-label="Page" title="Page view"><FileText/></ToggleGroupItem><ToggleGroupItem value="edgeless" aria-label="Canvas" title="Canvas view"><LayoutDashboard/></ToggleGroupItem></ToggleGroup>{save}</div>,toolbar)}<InlineTagSurface page={page} writable={writable} checkpoint={checkpoint}>{mode==='block'?<PageSurface/>:<EdgelessSurface/>}</InlineTagSurface></>
+  return <>{toolbar&&createPortal(<div className="editor-controls"><ToggleGroup className="surface-tabs" type="single" size="sm" value={mode} aria-label="Document view" onValueChange={next=>{if(next==='block'||next==='edgeless')setMode(next)}}><GlassSurface kind="toolbar"/><ToggleGroupItem value="block" aria-label="Page" title="Page view"><FileText/></ToggleGroupItem><ToggleGroupItem value="edgeless" aria-label="Canvas" title="Canvas view"><LayoutDashboard/></ToggleGroupItem></ToggleGroup>{save}</div>,toolbar)}<InlineTagSurface page={page} writable={writable} checkpoint={checkpoint}>{mode==='block'?<PageSurface/>:<EdgelessSurface/>}</InlineTagSurface></>
 }
 export function Editor({view,surfaceMode,installation,onFileAdded,citationTarget,finishCitation,report,title,replica,toolbar,heading,id,workspace,writable,checkpoint,applyInEditor,onSaved,initialText}:EditorProps){
   const [runtime,setRuntime]=useState<EditorRuntime>(),[status,setStatus]=useState('Opening…')

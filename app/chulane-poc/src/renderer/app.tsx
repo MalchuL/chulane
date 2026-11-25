@@ -3,6 +3,7 @@ import React,{useCallback,useEffect,useMemo,useRef,useState} from 'react'
 import {createRoot} from 'react-dom/client'
 import {flushSync} from 'react-dom'
 import {LiquiGlass} from '@liqui-design/glass'
+import {GlassEnabled,GlassSurface} from './ui/glass-surface'
 import {Copy,Inbox,HardDrive,CloudDownload,LogOut,Archive,BookOpen,Globe,Hash,Link2,CalendarDays,Folder,Plus,Trash2,Search,FileText,Paperclip,Check,ArrowDownToLine,FolderPlus,FolderInput,PanelLeft,Layers,Upload,X,Ellipsis,MessageSquareText,RotateCcw,Pencil} from 'lucide-react'
 import {defaultPreset,PreventSelection} from '@dnd-kit/dom'
 import {DragDropProvider} from '@dnd-kit/react'
@@ -645,13 +646,13 @@ function App(){
     notify(result.metadataIncomplete?notice+' This older device copy cannot confirm attachment or field metadata.':notice,!result.metadataIncomplete&&!omitted.length)
   }
   async function logout(){await json('logout','POST',{});location.replace(location.pathname)}
-  if(auth)return <SignIn openOffline={workspace=>{
+  if(auth)return <GlassEnabled.Provider value={appearance.glass}><SignIn openOffline={workspace=>{
     // Keep the requested destination when this device can reopen its owning workspace.
     if(requested===String(workspace)){L(undefined);W(workspace)}
     else chooseWorkspace(workspace)
     A(false);reload(n=>n+1)
-  }} opened={()=>{W(0);L(undefined);setCatalog(undefined);E('');A(false);reload(n=>n+1)}}/>
-  if(!ws&&catalog)return <WorkspaceStart catalog={catalog} updated={setCatalog} missing={requested!==null} logout={()=>act(logout)} choose={chooseWorkspace}/>
+  }} opened={()=>{W(0);L(undefined);setCatalog(undefined);E('');A(false);reload(n=>n+1)}}/></GlassEnabled.Provider>
+  if(!ws&&catalog)return <GlassEnabled.Provider value={appearance.glass}><WorkspaceStart catalog={catalog} updated={setCatalog} missing={requested!==null} logout={()=>act(logout)} choose={chooseWorkspace}/></GlassEnabled.Provider>
   if(!lib)return <main className="login">{error||'Opening workspace…'}</main>
   /** Resolve the current workspace date again after checkpointing the open journal. */
   function startPage(event:React.MouseEvent<HTMLButtonElement>){
@@ -847,7 +848,7 @@ function App(){
       {(['approve','dismiss'] as const).map(choice=><Button variant="ghost" size="sm" key={choice} disabled={choice==='approve'&&((proposal.page!==null&&!target)||occupied||(!!proposal.draft&&'project' in proposal.draft&&proposal.draft.project!==null&&destinationPath(proposal.draft.project)===null))} onClick={()=>act(()=>decideProposal(proposal,choice,target?.title))}>{choice}</Button>)}</Alert>})}
     </ScrollArea></SettingsPanel>
   const layoutKey=JSON.stringify(['chulane-editor-layout-v1',lib.installation,lib.profile??lib.role,lib.replica,ws])
-  return <Toast.Provider swipeDirection="right"><InlineTagsContext.Provider value={{pages:lib.pages,namedReferences:lib.namedReferences,workspace:ws,pageLabel,searchBlocks,openNamed,open:openSource,tags:lib.tags,report:E,apply:lib.offline?undefined:async(page,block,choice)=>{
+  return <GlassEnabled.Provider value={appearance.glass}><Toast.Provider swipeDirection="right"><InlineTagsContext.Provider value={{pages:lib.pages,namedReferences:lib.namedReferences,workspace:ws,pageLabel,searchBlocks,openNamed,open:openSource,tags:lib.tags,report:E,apply:lib.offline?undefined:async(page,block,choice)=>{
     await json('pages/'+page+'/tags'+suffix,'PUT',{block,active:true,fromWriting:true,...(choice.id?{tag:choice.id}:{name:choice.name})})
     await refresh()
   }}}><BlockLinkComposer.Provider value={blockComposer}><DragDropProvider plugins={referenceDragPlugins}><div className={'app'+(agentOpen?' agent-open':'')+(mobile?' menu-open':'')}>
@@ -874,7 +875,7 @@ function App(){
     {page&&rows.length>0&&<section className="page-index" aria-label="Pages in this view"><div className="caprow">Pages</div><ScrollArea aria-label="Page list">{rows.map(item=><div className="page-index-entry" key={item.id}><Button variant="ghost" size="sm" disabled={lib.offline&&item.availableOffline===false} title={availabilityLabel(item.availableOffline)} aria-description={availabilityLabel(item.availableOffline)} aria-current={item.id===page.id?'page':undefined} onClick={()=>afterSave(()=>openLibraryPage(item))}><PageIcon available={item.availableOffline}/><span>{pageLabel(item)}</span></Button>{agentOpen&&write&&item.id>0&&<PageDragHandle page={item}/>}</div>)}</ScrollArea></section>}
     </div></ScrollArea>
     <footer>{lib.serverAdmin&&!lib.offline&&<ServerSettings/>}<Appearance {...appearance}/><PendingRecovery catalog={lib}/>{lib.desktop&&<ServerPicker local={lib.workspaces} choose={id=>afterSave(()=>{if(id!==ws)chooseWorkspace(id)})}/>} <span data-part="workspace-location">{lib.desktop?'Local workspace':'Web workspace'}</span> <Badge variant="outline" className="role">{lib.owner?'owner':lib.role}</Badge>{!lib.desktop&&<Button variant="ghost" size="icon-sm" aria-label="Sign out" title="Sign out" onClick={()=>afterSave(logout)}><LogOut/></Button>}</footer></nav>
-    <main className="work" data-journal={journal?(query?'search':'open'):undefined}><header className="crumb"><Button variant="ghost" size="sm" ref={railToggle} className="rail-toggle" aria-label="Toggle navigation" title="Toggle navigation" aria-expanded={mobile} aria-controls="library-navigation" onClick={()=>M(!mobile)}><PanelLeft/></Button><Breadcrumb><BreadcrumbList><BreadcrumbItem data-copyable="">{workspace}</BreadcrumbItem><BreadcrumbSeparator/>{!page&&parentProject&&activeProject&&<><BreadcrumbItem><Button variant="ghost" size="sm" aria-label={'Up to '+parentProject.project.name} title={parentProject.path} onClick={()=>browseFolder(parentProject.project.id,activeProject.project.id)}>{parentProject.project.name}</Button></BreadcrumbItem><BreadcrumbSeparator/></>}<BreadcrumbItem><Button ref={libraryCrumb} variant="ghost" size="sm" onClick={()=>afterSave(()=>navigate(scope))}>{scopeTitle}</Button></BreadcrumbItem></BreadcrumbList></Breadcrumb><div data-part="document-tools" ref={setDocumentTools}/>{lib.replica&&write&&<WorkspaceSync closedViews={closedViews} key={lib.replica} workspace={ws} lib={lib} page={id} mounted={source=>Array.from(views.current.values()).some(view=>view.page===source)||!!journalEditor(source)} checkpoint={()=>saveEditors('server')}/>}<div data-part="agent-commands">{currentDocument&&lib.presence&&lib.profile&&!lib.offline&&<DocumentParticipants key={lib.profile+'/'+ws+'/'+currentDocument.id} workspace={ws} page={currentDocument.id} replica={lib.replica} profile={lib.profile}/>}<span className="sr-only" aria-live="polite" aria-atomic="true">{pendingCount>0?reviewLabel:''}</span>{pendingRequests}<Button size="icon-sm" variant="ghost" aria-label="Agent" title="Workspace agent" aria-expanded={agentOpen} onClick={()=>setAgentOpen(!agentOpen)}><MessageSquareText/></Button></div>{currentDocument&&pageMenu(currentDocument)}</header>
+    <main className="work" data-journal={journal?(query?'search':'open'):undefined}><header className="crumb"><GlassSurface kind="header"/><Button variant="ghost" size="sm" ref={railToggle} className="rail-toggle" aria-label="Toggle navigation" title="Toggle navigation" aria-expanded={mobile} aria-controls="library-navigation" onClick={()=>M(!mobile)}><PanelLeft/></Button><Breadcrumb><BreadcrumbList><BreadcrumbItem data-copyable="">{workspace}</BreadcrumbItem><BreadcrumbSeparator/>{!page&&parentProject&&activeProject&&<><BreadcrumbItem><Button variant="ghost" size="sm" aria-label={'Up to '+parentProject.project.name} title={parentProject.path} onClick={()=>browseFolder(parentProject.project.id,activeProject.project.id)}>{parentProject.project.name}</Button></BreadcrumbItem><BreadcrumbSeparator/></>}<BreadcrumbItem><Button ref={libraryCrumb} variant="ghost" size="sm" onClick={()=>afterSave(()=>navigate(scope))}>{scopeTitle}</Button></BreadcrumbItem></BreadcrumbList></Breadcrumb><div data-part="document-tools" ref={setDocumentTools}/>{lib.replica&&write&&<WorkspaceSync closedViews={closedViews} key={lib.replica} workspace={ws} lib={lib} page={id} mounted={source=>Array.from(views.current.values()).some(view=>view.page===source)||!!journalEditor(source)} checkpoint={()=>saveEditors('server')}/>}<div data-part="agent-commands">{currentDocument&&lib.presence&&lib.profile&&!lib.offline&&<DocumentParticipants key={lib.profile+'/'+ws+'/'+currentDocument.id} workspace={ws} page={currentDocument.id} replica={lib.replica} profile={lib.profile}/>}<span className="sr-only" aria-live="polite" aria-atomic="true">{pendingCount>0?reviewLabel:''}</span>{pendingRequests}<Button size="icon-sm" variant="ghost" aria-label="Agent" title="Workspace agent" aria-expanded={agentOpen} onClick={()=>setAgentOpen(!agentOpen)}><MessageSquareText/></Button></div>{currentDocument&&pageMenu(currentDocument)}</header>
     {lib.offline&&<Alert role="status" className="message">{lib.signInRequired?<>Session expired · Working offline. <Button size="sm" variant="outline" onClick={()=>afterSave(()=>{selectCachedSession(null);A(true);reload(n=>n+1)})}>Sign in to sync</Button></>:'Offline · Previously opened documents are available on this device.'}</Alert>}
     {desktopServer&&lib.profile&&lib.replica&&!!lib.removedPages?.length&&<RemovedPageCopies key={lib.replica} profile={lib.profile} workspace={ws} replica={lib.replica} removed={lib.removedPages} notify={notify}/>}
     {!page&&activeProject&&write&&lib.projectNameConflicts?.filter(conflict=>conflict.project===activeProject.project.id).map(conflict=><Alert key={conflict.id} className="message">
@@ -991,7 +992,7 @@ function App(){
         </form>
       </PopoverContent>
     </Popover>
-  </div></DragDropProvider></BlockLinkComposer.Provider></InlineTagsContext.Provider><Toast.Viewport data-app-overlay="notifications" data-part="workspace-notifications" title="Notifications (F8)"/></Toast.Provider>
+  </div></DragDropProvider></BlockLinkComposer.Provider></InlineTagsContext.Provider><Toast.Viewport data-app-overlay="notifications" data-part="workspace-notifications" title="Notifications (F8)"/></Toast.Provider></GlassEnabled.Provider>
 }
 const root=createRoot(document.getElementById('root')!)
 if(window.chulaneSidebarWidths){

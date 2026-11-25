@@ -1,0 +1,28 @@
+/* Application picker and scrollbar materials share the workspace palette and preserve native input behavior. */
+@media screen {
+  [data-glass] [data-slot=native-select-wrapper]:has(>select[data-app-select]) {
+    border-radius:min(1rem,var(--rivto-radius));
+  }
+  [data-glass] select[data-app-select]:not(:where(.workspace-switcher *,[data-part=conversation-bar] *)) {
+    border-radius:inherit;
+    background:var(--glass-pane);
+    box-shadow:inset 0 1px var(--glass-edge);
+  }
+  @supports (appearance:base-select) {
+    [data-glass] select[data-app-select]::picker(select) {
+      margin-block:6px;
+      border-radius:min(.75rem,var(--rivto-radius));
+    }
+  }
+  /* The empty overlay channel leaves content under the thumb visible while keeping a wider drag target. */
+  [data-glass] [data-part=scroll-area]>div[data-orientation=vertical] {width:14px}
+  [data-glass] [data-part=scroll-area]>div[data-orientation=horizontal] {height:14px}
+  [data-glass] [data-part=scroll-thumb] {
+    --lq-tint:color-mix(in oklab,var(--ink) 52%,transparent);
+    --lq-tint-deep:color-mix(in oklab,var(--ink) 40%,transparent);
+    --lq-clear-wash:transparent;
+    --lq-clear-wash-deep:transparent;
+  }
+  /* Radix reads the pointer offset from event.target when a thumb drag starts. */
+  [data-glass] [data-part=scroll-thumb]>* {pointer-events:none}
+}

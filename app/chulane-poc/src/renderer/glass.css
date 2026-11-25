@@ -1,58 +1,81 @@
-/* Soft reflections drift behind the shell. The workspace switcher refracts the layers below it. */
+/* A viewport scene and palette-derived materials shared by the shell, floating panels and grouped tools. */
 @media screen {
   :root[data-glass] {
-    --glass-base:color-mix(in oklab,var(--rail) 65%,var(--paper));
-    --glass-smoke:color-mix(in oklab,var(--glass-base) 90%,var(--ink));
+    --glass-base:color-mix(in oklab,var(--rail) 48%,light-dark(#8e9fbe,#1a2743));
+    --blob-iris:light-dark(#9b7fe9,#51488f);
+    --blob-lagoon:light-dark(#3cbfae,#217774);
+    --blob-apricot:light-dark(#ffa17d,#995a46);
+    --blob-rose:light-dark(#ef86b2,#88476b);
+    --blob-short:clamp(70px,13vmin,160px);
+    --blob-long:clamp(108px,21vmin,245px);
+    background:var(--glass-base);
     --glass-edge:color-mix(in oklab,var(--paper) 52%,transparent);
-    --glass-glint:color-mix(in oklab,white 18%,var(--glass-base));
     --glass-tint:color-mix(in oklab,var(--paper) 70%,transparent);
     --glass-shadow:inset 0 1px 0 var(--glass-edge),inset 0 -1px 0 color-mix(in oklab,var(--ink) 8%,transparent),
       0 6px 20px -8px color-mix(in oklab,var(--ink) 18%,transparent);
-    --caption-surface:var(--glass-base);
+    --glass-pane:color-mix(in oklab,var(--rail) 28%,transparent);
+    --caption-surface:var(--glass-tint);
   }
 
-  [data-glass] :where(.rail,.agent-panel,body:has(.login)) {
-    isolation:isolate;
+  /* A single viewport backdrop stays behind the app, including portalled controls. */
+  [data-glass] body {isolation:isolate;background:var(--glass-base)}
+  [data-glass] body::before,[data-glass] body::after {
+    content:"";position:fixed;inset:-6dvh 0;z-index:-1;pointer-events:none;
   }
-  /* Broad, off-center reflections cross the curved surfaces as the two layers drift past each other. */
-  [data-glass] :where(.rail,.agent-panel,body:has(.login))::before,
-  [data-glass] :where(.rail,.agent-panel,body:has(.login))::after {
-    content:"";position:absolute;z-index:-1;pointer-events:none;
-    width:100%;height:74%;left:0;
+  [data-glass] body::before {
+    background:
+      radial-gradient(ellipse var(--blob-long) var(--blob-short) at 13% 21%,var(--blob-iris) 40%,transparent 88%),
+      radial-gradient(ellipse var(--blob-short) var(--blob-long) at 64% 12%,var(--blob-apricot) 46%,transparent 87%),
+      radial-gradient(ellipse var(--blob-long) var(--blob-short) at 79% 80%,var(--blob-lagoon) 32%,transparent 91%);
   }
-  [data-glass] :where(.rail,.agent-panel,body:has(.login))::before {
-    top:0;
-    background:radial-gradient(ellipse 115% 78% at var(--reflection-x,-16%) 12%,
-      transparent 38%,var(--glass-edge) 63%,var(--glass-glint) 70%,var(--glass-smoke) 74%,transparent 90%);
+  [data-glass] body::after {
+    background:
+      radial-gradient(ellipse var(--blob-short) var(--blob-long) at 26% 81%,var(--blob-lagoon) 42%,transparent 91%),
+      radial-gradient(ellipse var(--blob-long) var(--blob-short) at 91% 32%,var(--blob-rose) 36%,transparent 86%),
+      radial-gradient(ellipse var(--blob-long) var(--blob-short) at 56% 102%,var(--blob-iris) 40%,transparent 90%);
   }
-  [data-glass] :where(.rail,.agent-panel,body:has(.login))::after {
-    bottom:0;
-    background:radial-gradient(ellipse 112% 76% at 115% 87%,
-      transparent 29%,var(--glass-edge) 52%,var(--glass-glint) 65%,var(--glass-smoke) 72%,transparent 90%);
-  }
-  [data-glass] body:has(.login)::before,[data-glass] body:has(.login)::after {
-    position:fixed;inset:auto;width:100%;height:100%;
-  }
-  [data-glass] body:has(.login)::before {top:0}
-  [data-glass] body:has(.login)::after {bottom:0}
   @keyframes glass-drift {
     from {transform:translateY(-5%)}
     to {transform:translateY(5%)}
   }
   @media (prefers-reduced-motion:no-preference) {
-    [data-glass] :where(.rail,.agent-panel,body:has(.login))::before,
-    [data-glass] :where(.rail,.agent-panel,body:has(.login))::after {
+    [data-glass] body::before,
+    [data-glass] body::after {
       animation:glass-drift 28s ease-in-out -8s infinite alternate;
       animation-play-state:var(--glass-motion,running);
     }
-    [data-glass] :where(.rail,.agent-panel,body:has(.login))::after {
+    [data-glass] body::after {
       animation-duration:39s;animation-direction:alternate-reverse;
     }
     :root[data-glass=still] {--glass-motion:paused}
   }
-  [data-glass] .rail {
-    background:var(--glass-base);
+  [data-glass] .app {
+    background:transparent;
+    --pane-rail:color-mix(in oklab,var(--rail) 58%,transparent);
+    --pane-paper:color-mix(in oklab,var(--paper) 75%,transparent);
+    --pane-highlight:light-dark(#ffffff82,#c9ddff23);
   }
+  [data-glass] :is(.rail,.agent-panel,.crumb,.library,.dv-groupview) {
+    isolation:isolate;background:transparent;
+  }
+  [data-glass] :is(.library,.dv-groupview) {position:relative}
+  /* Frost the backdrop on its own layer. Editor tools and their fixed-position popups keep their coordinate system. */
+  [data-glass] :is(.rail,.agent-panel,.library,.dv-groupview)::after {
+    content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;border-radius:inherit;
+    background-color:var(--pane-paper);
+    background-image:
+      radial-gradient(ellipse 90% 34% at 0% 0% in oklab,var(--pane-highlight),transparent 78%),
+      linear-gradient(125deg in oklab,transparent 48%,light-dark(#e4edff30,#41517714));
+    backdrop-filter:blur(12px) saturate(145%);
+  }
+  [data-glass] :is(.rail,.agent-panel)::after {background-color:var(--pane-rail)}
+  @supports (corner-shape:squircle) {
+    [data-glass] .app :is(.rail,.agent-panel,.library,.dv-groupview) {
+      corner-shape:squircle;border-radius:calc(var(--pane-radius) * 1.4);
+    }
+    [data-glass] :is(.rail,.agent-panel,.library,.dv-groupview)::after {corner-shape:inherit}
+  }
+  [data-glass] .app .crumb {border-radius:18px}
   [data-glass] .workspace-switcher {position:relative}
   [data-glass] [data-part=workspace-lens] {
     position:absolute;inset:-3px 0;pointer-events:none;
@@ -64,44 +87,91 @@
     border-radius:10px;background:color-mix(in oklab,var(--selected) 85%,transparent);
     box-shadow:inset 0 1px var(--glass-edge);
   }
-  [data-glass] .crumb {
-    background:var(--glass-base);
-  }
-  [data-glass] .agent-panel {
-    --reflection-x:108%;background:var(--glass-base);
-  }
   [data-glass] .agent-panel [data-part=composer] {box-shadow:var(--glass-shadow)}
-  [data-glass] .surface-tabs {background:var(--glass-tint);box-shadow:inset 0 1px var(--glass-edge)}
-  [data-glass] .editor-dock .dockview-theme-light {
-    --dv-tabs-and-actions-container-background-color:var(--glass-base);
+  /* Keep the glass behind real Radix children so its optics cannot move focus or intercept gestures. */
+  [data-glass] [data-part=liqui-surface] {
+    position:absolute;inset:0;z-index:-1;pointer-events:none;border-radius:inherit;
+    --lq-tint:var(--glass-tint);--lq-tint-deep:var(--glass-pane);
   }
+  [data-glass] .crumb>[data-part=liqui-surface] {
+    --lq-tint:color-mix(in oklab,var(--paper) 90%,transparent);
+    --lq-tint-deep:var(--pane-rail);
+  }
+  [data-glass] :is(.surface-tabs,[data-part=conversation-bar]) {
+    position:relative;isolation:isolate;background:transparent;border-radius:10px;
+  }
+  [data-glass] .surface-tabs [data-part=liqui-surface] {box-shadow:var(--glass-shadow)}
+  [data-glass] .surface-tabs [data-slot=toggle-group-item] {border-radius:8px}
+  [data-glass] [data-part=conversation-bar]>[data-part=liqui-surface] {
+    inset:1px 8px 4px;box-shadow:inset 0 1px var(--glass-edge);
+  }
+  /* Keep the tinted island faces during live resizing. Rebuild full-pane blur and
+     size-dependent Liqui maps once the separator reaches its final position. */
+  [data-glass] .app:has([data-resizing-sidebar]) {
+    & :is(.rail,.agent-panel,.library,.dv-groupview)::after {backdrop-filter:none}
+    & :is(.crumb,.workspace-switcher,[data-part=conversation-bar]) {
+      background:linear-gradient(135deg in oklab,var(--glass-tint),var(--glass-pane));
+    }
+    & .workspace-switcher {border-radius:12px}
+    & :is(.crumb,[data-part=conversation-bar])>[data-part=liqui-surface],
+    & [data-part=workspace-lens] {display:none}
+  }
+  /* Outline and secondary actions get a clear wash. Colored permission and selection states retain their fills. */
+  [data-glass] :where(.app,.login,[data-app-overlay]) [data-slot=button]:is([data-variant=outline],[data-variant=secondary]):not(:where(
+    .surface-body *, .workspace-switcher *, .surface-tabs *, [data-part=conversation-bar] *, [data-agent-mode], [aria-pressed=true], [aria-current], [data-state=on]
+  )) {
+    border-color:color-mix(in oklab,var(--ink) 16%,transparent);
+    background:linear-gradient(155deg,var(--glass-tint),var(--glass-pane));
+    box-shadow:inset 0 1px var(--glass-edge);
+  }
+  [data-glass] :where(.app,.login,[data-app-overlay]) [data-slot=button]:is([data-variant=outline],[data-variant=secondary]):not(:where(
+    .surface-body *, [data-agent-mode], [aria-pressed=true], [aria-current], [data-state=on]
+  )):hover:enabled {background-color:var(--selected);color:var(--selected-ink)}
+  [data-glass] :where(.app,.login,[data-app-overlay]) [data-slot=button]:not(:where(.surface-body *)):focus-visible {
+    outline:2px solid var(--focus);outline-offset:2px;
+  }
+  [data-glass] .editor-dock .dockview-theme-light {
+    --dv-group-view-background-color:var(--pane-paper);
+    --dv-tabs-and-actions-container-background-color:var(--glass-pane);
+    --dv-activegroup-visiblepanel-tab-background-color:var(--glass-tint);
+    --dv-inactivegroup-visiblepanel-tab-background-color:var(--glass-pane);
+    --dv-context-menu-background-color:var(--paper);
+  }
+  [data-glass] .surface-body .page-surface {background-color:transparent}
+  [data-glass] .surface-body .edgeless-viewport {background-color:transparent}
+  :root[data-glass][data-custom-theme] .surface-body {background:color-mix(in oklab,var(--editor-paper) 85%,transparent)}
   [data-glass] body:has(.login) {
-    background:var(--glass-base);
     min-height:var(--workspace-height,100dvh);display:flow-root;
   }
   [data-glass] .login {border-radius:18px;box-shadow:var(--glass-shadow)}
+  [data-glass] .agent-panel :is(.agent-review,[data-part=provider-card]) {background:var(--glass-tint)}
   [data-glass] :is([data-app-overlay=menu],[data-app-overlay=popover],[data-app-overlay=dialog],[data-part=workspace-toast]) {
-    box-shadow:var(--glass-shadow);
+    isolation:isolate;box-shadow:var(--glass-shadow);
+    /* A permanent wash also covers tall, scrolling popovers after their upper rim leaves view. */
+    background-color:var(--glass-tint);
+  }
+  [data-glass] :is([data-app-overlay=menu],[data-app-overlay=popover],[data-part=workspace-toast]) {
+    position:relative;
+  }
+  /* Drawers overlay text on small screens. The stronger tint also works without backdrop blur. */
+  @media (max-width:900px) {
+    [data-glass] .agent-panel::after {
+      background-color:color-mix(in oklab,var(--rail) 89%,transparent);
+      backdrop-filter:blur(20px);
+    }
+  }
+  @media (max-width:760px) {
+    [data-glass] .menu-open .rail::after {
+      background-color:color-mix(in oklab,var(--rail) 89%,transparent);
+      backdrop-filter:blur(20px);
+    }
   }
   @supports (backdrop-filter:blur(1px)) {
-    /* On small screens the drawer actually overlaps the document. Quiet the lettering behind it. */
-    @media (max-width:900px) {
-      [data-glass] .agent-panel {
-        background:color-mix(in oklab,var(--glass-base) 89%,transparent);
-        backdrop-filter:blur(20px);
-      }
-    }
-    @media (max-width:760px) {
-      [data-glass] .menu-open .rail {
-        background:color-mix(in oklab,var(--glass-base) 89%,transparent);
-        backdrop-filter:blur(20px);
-      }
-    }
     [data-glass] select[data-app-select]::picker(select) {
       background:var(--glass-tint);backdrop-filter:blur(16px);box-shadow:var(--glass-shadow);
     }
     [data-glass] .agent-panel [data-part=composer]:not([data-drag=over]),
-    [data-glass] :is(.login,[data-app-overlay=menu],[data-app-overlay=popover],[data-app-overlay=dialog],[data-part=workspace-toast]) {
+    [data-glass] .login {
       background-color:var(--glass-tint);
       backdrop-filter:blur(16px);
     }

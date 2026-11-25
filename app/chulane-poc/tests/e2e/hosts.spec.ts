@@ -1032,13 +1032,23 @@ async function setAppearance(p:Page){
   await expect(preset).toBeVisible()
   const material=dialog.getByRole('combobox',{name:'Surface style'})
   const lens=p.locator('[data-part=workspace-lens]')
+  const overlayLens=dialog.locator(':scope > [data-part=liqui-surface]')
+  const editorLens=p.locator('.surface-tabs:visible > [data-part=liqui-surface]')
+  const headerLens=p.locator('.crumb > [data-part=liqui-surface]')
+  await expect(overlayLens).toBeVisible()
+  await expect(overlayLens).toHaveAttribute('aria-hidden','true')
+  await expect(overlayLens).toHaveCSS('pointer-events','none')
+  await expect(headerLens).toHaveCSS('pointer-events','none')
+  await expect(editorLens).toHaveCount(1)
   await expect(lens).toBeVisible()
   const switcher=p.locator('.workspace-switcher')
   const bounds=await switcher.boundingBox()
   const rail=p.getByRole('navigation',{name:'Library',exact:true})
-  const blob=()=>rail.evaluate(el=>{
-    const style=getComputedStyle(el,'::before')
-    return {name:style.animationName,state:style.animationPlayState,softColor:style.backgroundImage.includes('radial-gradient')&&style.boxShadow==='none'}
+  await expect.poll(()=>rail.evaluate(el=>getComputedStyle(el,'::before').content)).toBe('none')
+  await expect(p.locator('.page-surface').first()).toHaveCSS('background-color','rgba(0, 0, 0, 0)')
+  const blob=()=>p.evaluate(()=>{
+    const style=getComputedStyle(document.body,'::before')
+    return {name:style.animationName,state:style.animationPlayState,softColor:style.position==='fixed'&&style.backgroundImage.includes('radial-gradient')}
   })
   await p.emulateMedia({reducedMotion:'no-preference'})
   await expect.poll(blob).toEqual({name:'glass-drift',state:'running',softColor:true})
@@ -1050,6 +1060,9 @@ async function setAppearance(p:Page){
   await expect.poll(blob).toEqual({name:'none',state:'running',softColor:true})
   await p.emulateMedia({reducedMotion:null})
   await material.selectOption('solid')
+  await expect(overlayLens).toHaveCount(0)
+  await expect(headerLens).toHaveCount(0)
+  await expect(editorLens).toHaveCount(0)
   await expect(lens).toHaveCount(0)
   expect(await switcher.boundingBox()).toEqual(bounds)
   await material.selectOption('auto')
@@ -1246,6 +1259,8 @@ try{
     await splitReader.getByRole('button',{name:'Split right'}).click()
     await splitReader.getByRole('radio',{name:'Canvas',exact:true}).click()
     await expect.poll(()=>new URL(splitReader.url()).searchParams.get('view')).toBe('canvas')
+    await expect(splitReader.locator('.edgeless-viewport:visible')).toHaveCSS('background-color','rgba(0, 0, 0, 0)')
+    await expect(splitReader.locator('.edgeless-viewport:visible')).toHaveCSS('background-image',/radial-gradient/)
     // A reader already at the citation receives a collaborator's deletion through ordinary document sync.
     const stateUrl=host.url+'/api/pages/'+linkedPage+'/state?workspace=1'
     const current=await p.request.get(stateUrl)
@@ -1911,9 +1926,15 @@ try{
     }
     const first=await desktop.firstWindow();await firstWorkspace(first);await newPage(first)
     const libraryWidth=first.getByRole('separator',{name:'Resize library sidebar'})
+    const backdropBounds=()=>first.evaluate(()=>{
+      const {width,height}=getComputedStyle(document.body,'::before')
+      return {width,height}
+    })
+    const originalBackdrop=await backdropBounds()
     const startingLibraryWidth=await libraryWidth.evaluate(el=>Math.round(el.parentElement!.getBoundingClientRect().width))
     await libraryWidth.press('ArrowRight')
     await expect(libraryWidth).toHaveAttribute('aria-valuenow',String(startingLibraryWidth+12))
+    expect(await backdropBounds()).toEqual(originalBackdrop)
     const savedLibraryWidth=String(startingLibraryWidth+12)
     const rail=first.getByRole('navigation',{name:'Library',exact:true})
     expect(await rail.evaluate(node=>node.scrollWidth-node.clientWidth)).toBe(0)

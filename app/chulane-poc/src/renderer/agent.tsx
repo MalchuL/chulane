@@ -4,6 +4,7 @@ import {editorLinkTarget,type EditorTarget} from './editor-address'
 import {AgentModeBadge,AgentModePicker} from './agent-mode-picker'
 import {AgentMessage} from './agent-message'
 import {Disclosure} from './ui/disclosure'
+import {GlassSurface} from './ui/glass-surface'
 import {useContext,useEffect,useImperativeHandle,useMemo,useRef,useState} from 'react'
 import {useDragDropMonitor,useDroppable} from '@dnd-kit/react'
 import {ArrowUp,ArrowUpRight,BookOpen,Check,Clock3,Download,FileText,FolderPlus,Layers,Link2,MessageSquare,CornerUpRight,Paperclip,Pencil,Plus,Settings2,Square,Trash2,Users,X} from 'lucide-react'
@@ -399,7 +400,7 @@ export function AgentSidebar({permissionScope,surface,receiveEdit,pageLabel,dest
       </Popover>}
       <Button size="icon-sm" variant="ghost" onClick={close} aria-label="Close agent" title="Close agent"><X/></Button>
     </header>
-    <div data-part="conversation-bar"><MessageSquare size={15}/>
+    <div data-part="conversation-bar"><GlassSurface kind="toolbar"/><MessageSquare size={15}/>
       <NativeSelect aria-label="Conversation" value={chat} disabled={busy||switching||offline} size="sm" onChange={e=>select(Number(e.target.value))}>
         {(!chat||hasInitialDraft)&&<NativeSelectOption value={0}>New conversation</NativeSelectOption>}{settings?.chats.map(c=><NativeSelectOption key={c.id} value={c.id}>{c.title}</NativeSelectOption>)}</NativeSelect>
       {canWriteChat&&<ProposalHistory ws={ws} openSource={source=>act(()=>open(source))}/>}

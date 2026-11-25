@@ -21,6 +21,19 @@ type DockProps={
 }
 const Context=createContext<(DockProps&{active?:string;closeTab:(id:string)=>void})|null>(null)
 const dockClass='editor-dock'
+// Dockview includes this gutter in split dimensions, drag targets and resize handles.
+const dockTheme={...themeLight,gap:8}
+/** Dockview serializes painted boxes but restores track sizes, which include a share of each gutter. */
+function includeSplitGutters(branch:SerializedDockview['grid']['root']){
+  if(!Array.isArray(branch.data))return
+  const visible=branch.data.filter(child=>child.visible!==false)
+  const share=dockTheme.gap*(visible.length-1)/Math.max(1,visible.length)
+  for(const child of visible){
+    if(child.size!==undefined)child.size+=share
+    includeSplitGutters(child)
+  }
+}
+
 let nextView=0
 /** Restored panels retain their IDs so each group can select the same tab after reload. */
 function allocateViewId(api:DockviewApi){
@@ -112,10 +125,21 @@ function ResizeGroup({api,containerApi,group}:IDockviewHeaderActionsProps){
       <form data-part="group-size" onSubmit={event=>{
         event.preventDefault()
         const data=new FormData(event.currentTarget)
-        api.setSize({
+        const size={
           width:data.has('width')?Number(data.get('width')):undefined,
           height:data.has('height')?Number(data.get('height')):undefined
-        })
+        }
+        api.setSize(size)
+        // Dockview subtracts each group's share of the split gutter from the requested size.
+        // Read its layout result so nested groups and groups with more than two siblings resize precisely.
+        let compensate=false
+        for(const axis of ['width','height'] as const){
+          const requested=size[axis]
+          if(requested===undefined)continue
+          const gutter=requested-api[axis]
+          if(gutter>0&&gutter<dockTheme.gap){size[axis]=requested+gutter;compensate=true}
+        }
+        if(compensate)api.setSize(size)
         setOpen(false)
       }}>
         {(['width','height'] as const).map(axis=>api[axis]<containerApi[axis]&&<label key={axis}>
@@ -203,6 +227,7 @@ export function EditorDock(props:DockProps){
         // Hidden library views can have zero-size grid geometry. Keep the last visible layout.
         if(!frame.current?.clientWidth||!frame.current.clientHeight)return
         const layout=api.toJSON()
+        includeSplitGutters(layout.grid.root)
         for(const panel of Object.values(layout.panels))delete panel.title
         sessionStorage.setItem(props.layoutKey,JSON.stringify(layout))
       }catch{/* Session storage is optional in restricted browsing contexts. */}
@@ -284,7 +309,7 @@ export function EditorDock(props:DockProps){
       event.preventDefault();event.stopPropagation()
       if(!event.repeat)void closeTab(tab.dataset.tabPanelId)
     }}>
-    {(visible||api)&&<DockviewReact theme={themeLight} components={components} onReady={({api})=>{
+    {(visible||api)&&<DockviewReact theme={dockTheme} components={components} onReady={({api})=>{
       restoreLayout(api,props)
       setActive(api.activePanel?.id)
       setApi(api)

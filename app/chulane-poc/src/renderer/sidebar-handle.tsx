@@ -44,6 +44,7 @@ export function SidebarHandle({side,report}:{side:SidebarSide;report:(message:st
     const gesture=drag.current
     if(!gesture)return
     drag.current=undefined
+    handle.current?.removeAttribute('data-resizing-sidebar')
     document.documentElement.style.setProperty(property,gesture.preference)
   }
   useLayoutEffect(()=>{
@@ -76,12 +77,15 @@ export function SidebarHandle({side,report}:{side:SidebarSide;report:(message:st
     }}
     onPointerMove={e=>{
       const gesture=drag.current
-      if(gesture?.pointerId===e.pointerId)resize(gesture.width+(e.clientX-gesture.x)*(library?1:-1))
+      if(gesture?.pointerId!==e.pointerId)return
+      e.currentTarget.toggleAttribute('data-resizing-sidebar',true)
+      resize(gesture.width+(e.clientX-gesture.x)*(library?1:-1))
     }}
     onPointerUp={e=>{
       const gesture=drag.current
       if(gesture?.pointerId!==e.pointerId)return
       drag.current=undefined
+      e.currentTarget.removeAttribute('data-resizing-sidebar')
       commit(gesture.width,gesture.preference)
     }}
     onPointerCancel={e=>{if(drag.current?.pointerId===e.pointerId)cancelDrag()}}

@@ -1,0 +1,268 @@
+---
+title: Glass
+description: What the material is, what it needs from your layout, and where it degrades.
+---
+
+Most liqui components are a `LiquiGlass` surface with a component-shaped
+content layer on top. Understanding the material is most of understanding the
+library — and knowing [which components are deliberately not made of
+it](#not-everything-is-glass) is the rest.
+
+## The anatomy
+
+A surface is four stacked layers plus your content:
+
+| Layer | What it does |
+| --- | --- |
+| **Backdrop A** | `blur()` + `saturate()`. Never changes after first paint. |
+| **Backdrop B** | Displacement only — `backdrop-filter: url(#…)`, sampling A's output. |
+| **Tint** | A gradient carrying legibility, scaled by `frost`. |
+| **Specular** | A canvas-rendered rim light that makes the edge read as polished. |
+| **Content** | Your children, above all of it. |
+
+Blur and displacement are on **separate layers** deliberately. While the filter's
+`feImage` decodes its map, Chromium treats an entire
+`url(#f) blur() saturate()` chain as inert — combined on one layer, even the
+base blur would pop in late. Split, the surface is frosted from the first frame
+and refraction fades in over it.
+
+## It needs something to refract
+
+<ComponentPreview name="button-variants" backdrop="flat" hideCode />
+
+Those are the three Button variants on a flat fill. The two solid ones look
+exactly as they do anywhere else. The glass one has gone slack — it is not
+broken, there is simply nothing behind it to bend. Glass is a lens; a lens over
+a solid colour shows you the solid colour.
+
+Put surfaces over photography, video, a gradient with real edges, or content
+that scrolls underneath. If your design calls for glass on a flat background,
+you want `material="clear"` and a tint, not refraction.
+
+## Not everything is glass
+
+The line the library draws is the one Apple draws, and it is not about which
+components are important enough to get the nice material:
+
+> **Glass is for a surface you act *through*. A solid fill is for a control
+> that carries a *value*.**
+
+Buttons, popups, menus, toolbars, sheets and dialogs are the first kind — they
+are the layer floating over your content, and letting that content through is
+what the material is for. Checkbox, [Radio](/docs/components/radio-group),
+[Toggle](/docs/components/toggle) and [Switch](/docs/components/switch) are the
+second, and they are flat: `--lq-control` with a hairline at rest, `--lq-accent`
+when they are on.
+
+[Button](/docs/components/button) sits on both sides of the line, which is why
+it is the clearest illustration of it. Its default variant is glass, because
+pressing a button *does* something. Its `accent` and `danger` variants are
+solid, because those say *this is the one* — and a tinted lens contradicts
+itself: the colour is the whole message, and the lens exists to let the
+wallpaper through it. Accent over a night photograph and accent over a bright
+one were two different colours.
+
+This is also why a brand colour never needs `frost` tuning in liqui. Nothing
+carrying `--lq-accent` is a backdrop-filtered surface, so there is no
+transparency for a backdrop to leak through in the first place.
+
+## The dials
+
+| Prop | Range | What it controls |
+| --- | --- | --- |
+| `frost` | 0–1 | Material density. `0` ≈ Apple's *clear* (needs a busy backdrop and its own dimming), `1` ≈ *regular* (adaptive frosted, safe anywhere). Default `0.54`. |
+| `refraction` | px | `feDisplacementMap` scale — how hard the rim bends. |
+| `bezel` | px | How wide the refracting rim is. Menus want ~28, buttons ~11. |
+| `blur` | px | Base blur. `frost` adds up to 14px on top. |
+| `dispersion` | 0+ | Chromatic aberration. Costs ~3× filter work — leave at `0` unless it's a hero surface. |
+| `specular` | 0–1 | Rim light opacity. |
+| `radius` | px | Corner radius. Also drives the displacement map's shape. |
+| `corner` | `squircle` \| `round` | Corner shape. `squircle` (default) is the continuous corner, drawn 1.4× where `corner-shape` renders so it reads as large as a round one. `round` is a plain circular arc at exactly `radius`, map and lighting included. A capsule or a disc is round either way. |
+| `material` | `auto` \| `frost` \| `clear` | Rendering tier. `auto` refracts where the browser can, copies a `LiquiBackdrop` where it cannot, and frosts elsewhere. |
+| `finish` | `classic` \| `prism` | How the surface is lit. `classic` lights the top and bottom edges and frosts the pane. `prism` is one key light, a dark far rim, a hairline round the outline and a brightened, lightly tinted interior — glass type, as a surface. Wants a narrow bezel, a soft bend and a colour fringe; `prismGlassTheme` is that tuning. |
+| `lightAngle` | ° | Where the light comes from, clockwise from above. Unset, the finish's own: `0` for classic, `1` for prism. |
+| `edgeShade`, `hairline`, `brightness`, `tintFloor` | 0–1 | The rest of the lighting: shade on the edges facing away from the light, opacity of the outline, brightness pushed through the glass, and the tint left at `frost: 0`. Each follows the finish unless set. |
+
+Each of these is a per-surface prop, and the components set the geometric ones
+(`radius`, `refraction`, `bezel`) to values scaled to their own size. To move
+them all at once — or to change the colours — see [Theming](/docs/handbook/theming).
+
+## Corners
+
+Every corner in liqui is a continuous one — the squircle Apple draws, where the
+curve eases out of the straight edge instead of meeting it at a seam — and every
+component draws it the same way.
+
+**A glass surface** gets it from the kernel. `radius` is the round-corner size
+you mean; where `corner-shape: squircle` renders (Chromium 139+), the kernel
+raises it 1.4× so the softer curve reads the same size, and draws the map and
+the lighting on that curve. A surface whose corners reach half its height is a
+capsule or a disc, and keeps a true semicircle — a superellipse cannot close
+into one. `corner="round"` opts a surface out: a plain circular arc at exactly
+`radius`, for the few shapes the system itself draws that way.
+
+**Anything inside a surface** — a hover wash, a highlighted menu item, a
+pressed toggle — follows the surface. The surface publishes its corner as
+`--lq-radius` and its shape as `--lq-corner`, and a container states its inset
+once, next to its padding, with the height of what it holds:
+
+```tsx
+// The container: its padding, and its items' height.
+<div className="p-1.5 lq-nest [--lq-inset:6px] [--lq-item-h:24px]">
+  {/* The item: the surface's radius less the inset, on the surface's shape. */}
+  <div className="lq-corner rounded-[var(--lq-item-radius)]" />
+</div>
+```
+
+Same centre, parallel curves, an even gap all the way round — and a theme's
+`radiusScale` reaches the items through the surface, so they never drift out of
+step with it. Where the concentric radius comes out at half an item's height or
+more, the item is a capsule, and `lq-nest` gives it half its height on round
+corners — the rule the kernel applies to a surface. On a capsule strip the
+items come out capsules too.
+
+**Anything with a radius of its own** — a solid button, a checkbox, a chip —
+takes `lq-squircle`, with its radius as written and its height:
+
+```tsx
+<span className="lq-squircle [--lq-r:5px] [--lq-h:16px]" />
+```
+
+It gets exactly what a glass surface gets from the kernel: the radius 1.4×
+larger where the squircle renders, times the theme's `radiusScale`, and a true
+capsule once that reaches half the height. A box *around* a glass surface —
+the groove a tab indicator slides in — is the surface's corner plus the inset.
+Circles and pills stay `rounded-full`.
+
+Safari and Firefox do not draw `corner-shape` yet. There every corner is round
+at the radius as written — the same look liqui had before the squircle.
+
+## Performance budget
+
+The expensive parts are the canvas-generated displacement map and the
+`backdrop-filter` chain, in that order.
+
+- **Maps are cached** module-wide, keyed by size + optics. Ten buttons of the
+  same size cost one map.
+- **Filters are hoisted** into a single persistent hidden `<svg>` registry, so a
+  remounted surface references an already-decoded filter and refracts on the
+  first frame. This is why reopening a menu has no warm-up.
+- **Generation is half-resolution** above roughly 180×180.
+- `dispersion > 0` triples the filter work. Reserve it.
+- Stacking many large `backdrop-filter` surfaces is the one thing that will
+  actually cost you frames. Prefer one large surface over a dozen small ones.
+
+## Safari and Firefox
+
+Refraction is `backdrop-filter: url(#svg)`: the page behind the surface, run
+through the displacement filter. Chromium draws that. Safari drops the whole
+`backdrop-filter` value when it references an SVG filter, and Firefox ignores
+it (WebKit bug 245510 has an implementation in review). What both *do* draw is
+the same SVG filter on an element's own content — so a surface that knows what
+is behind it can refract a copy of that instead.
+
+`LiquiBackdrop` is how it knows. It is a positioned box that paints `backdrop`
+behind its children, and every `LiquiGlass` inside it copies that backdrop when
+the page cannot be refracted, offset by its own position in the box:
+
+```tsx
+import { LiquiBackdrop, LiquiGlass } from '@liqui-design/glass';
+
+<LiquiBackdrop backdrop={<img src="/wallpaper.jpg" className="absolute inset-0 size-full object-cover" />}>
+  <LiquiGlass radius={20}>…</LiquiGlass>
+</LiquiBackdrop>
+```
+
+The home stage and every preview on this site are one, which is why they
+refract in Safari. The copy is only ever the backdrop, so two kinds of surface
+stay on frost: one nested in another surface (what is behind a button on a
+panel is the panel), and one portalled out of the box (a popup). Both keep the
+rim. If something inside the box moves by a transform — a drag — pass a
+`revision` that changes with it, since no observer sees a transform.
+
+### Rendering tiers
+
+Each surface picks a tier when it mounts, by feature detection, best first.
+There is nothing to configure.
+
+| Tier | What it draws | Chromium | Safari, Firefox |
+| --- | --- | --- | --- |
+| **Backdrop refraction** | The page behind the surface, displaced | Every surface | — |
+| **Copy refraction** | A copy of the known backdrop, displaced | — | Inside a `LiquiBackdrop` |
+| **Frost** | Blur, tint and the baked rim | `material="frost"` | Everywhere else |
+| **Clear** | Tint and rim, no backdrop filter | `material="clear"` | `material="clear"` |
+
+The baked rim — highlight, edge line, hairline — is a pair of images, not a
+filter, so it is the same on every tier but clear, in every browser.
+
+### Capabilities
+
+| Capability | Chromium¹ | Safari | Firefox |
+| --- | :---: | :---: | :---: |
+| Refraction over any content | ✅ | —² | —² |
+| Refraction over a known backdrop | ✅ | ✅³ | ✅³ |
+| Chromatic dispersion | ✅ | ✅³ | ✅³ |
+| Baked rim lighting | ✅ | ✅ | ✅ |
+| Frosted fallback | ✅ | ✅ | ✅ |
+| Continuous corners | ✅⁴ | —⁵ | —⁵ |
+
+- ¹ Chrome, Edge, Arc, Opera and other Blink browsers.
+- ² No SVG filter in `backdrop-filter` yet (WebKit bug 245510). The surface frosts.
+- ³ Inside a `LiquiBackdrop`.
+- ⁴ Chromium 139+, through `corner-shape: squircle`.
+- ⁵ Round corners at the declared radius — see [Corners](#corners).
+
+There *is* something to check: **look at your UI in Safari.** A design tuned to
+`frost: 0` can be unreadable on a surface with no backdrop to copy, because in
+the refraction tiers the lens was doing the work the tint would otherwise have
+to do.
+
+Also honour user preference — a surface that ignores
+`prefers-reduced-transparency` is an accessibility bug, not a style choice:
+
+```css
+@media (prefers-reduced-transparency: reduce) {
+  .liqui-glass {
+    --lq-tint: var(--fd-background);
+    --lq-tint-deep: var(--fd-background);
+  }
+}
+```
+
+## Two things that will bite you
+
+**Never measure a surface with `getBoundingClientRect`.** Popups open under a
+`scale()` transition, and a rect measured mid-animation bakes a permanently
+undersized displacement map that nothing re-fires to correct. The result looks
+like weak frosted blur and is very hard to trace back. liqui uses
+`ResizeObserver` `contentRect` and `offsetWidth`, both of which are layout
+sizes and immune to transforms.
+
+**Never build the displacement map as an SVG data URI.** Chromium rasterizes
+`feImage` SVG sources with CSS features disabled — `mix-blend-mode` and modern
+`hsl()` silently do nothing, corrupting the map into a full-surface smear.
+Generate it on a canvas.
+
+## Where to look next
+
+Tuning these dials is mostly a matter of having seen enough of the material.
+liqui grew out of [Liquid Glass Design](https://liquidglassdesign.com/?ref=liqui.design),
+a growing gallery of liquid glass and glassmorphism references — interfaces,
+artwork and motion, each with the style prompt used to recreate it. It is the
+fastest way to work out what you are actually aiming at before you start moving
+`frost` and `refraction` around.
+
+<Cards>
+  <Card
+    title="Gallery"
+    href="https://liquidglassdesign.com/?ref=liqui.design"
+    external
+    description="Curated liquid glass references, by UI, art and video."
+  />
+  <Card
+    title="What liquid glass is"
+    href="https://liquidglassdesign.com/what-is-liquid-glass?ref=liqui.design"
+    external
+    description="The material as Apple defines it, and how it differs from glassmorphism."
+  />
+</Cards>

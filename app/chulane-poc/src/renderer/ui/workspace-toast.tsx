@@ -2,6 +2,7 @@
 import {X} from 'lucide-react'
 import {Toast} from 'radix-ui'
 import {Button} from './index'
+import {GlassSurface} from './glass-surface'
 
 type WorkspaceToastProps={
   message:string;title?:string;error?:boolean;background?:boolean;temporary?:boolean;dismiss:()=>void
@@ -13,7 +14,8 @@ export function WorkspaceToast({message,title,error,background,temporary,dismiss
     type={background?'background':'foreground'} duration={background||temporary?undefined:Infinity}
     role={error?'alert':undefined} aria-live={error?'off':undefined}
     onOpenChange={open=>{if(!open)dismiss()}}>
-    {title&&<Toast.Title>{title}</Toast.Title>}
+    <GlassSurface kind="overlay"/>
+    {title&&<Toast.Title data-part="toast-title">{title}</Toast.Title>}
     <Toast.Description data-copyable="">{message}</Toast.Description>
     <Toast.Close asChild><Button size="icon-sm" variant="ghost" aria-label="Dismiss" title="Dismiss"><X/></Button></Toast.Close>
   </Toast.Root>
