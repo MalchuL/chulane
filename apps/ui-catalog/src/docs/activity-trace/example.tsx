@@ -1,5 +1,10 @@
 /** Live ActivityTrace example for the reference page. */
-import { ActivityTrace } from "chulane_ui";
+import { ActivityTrace } from "@chulane/ui";
+
+/**
+ * Demonstrates structured activity entries and expandable tool data.
+ * @returns An activity disclosure with fixture events.
+ */
 export default function Example() {
   return (
     <ActivityTrace

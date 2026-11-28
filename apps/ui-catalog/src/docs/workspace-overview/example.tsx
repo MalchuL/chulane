@@ -1,7 +1,11 @@
 /** Live WorkspaceOverview usage, also displayed as source in the catalog. */
-import { WorkspaceOverview } from "chulane_ui";
+import { WorkspaceOverview } from "@chulane/ui";
 const reference = { id: "field", label: "Field notes", href: "#field-notes" };
 
+/**
+ * Demonstrate host-provided recent documents and pinned project links.
+ * @returns The overview catalog example.
+ */
 export default function Example() {
   return (
     <WorkspaceOverview

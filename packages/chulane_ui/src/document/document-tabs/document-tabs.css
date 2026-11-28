@@ -1,8 +1,8 @@
-/** Tab chrome shared by the document title and its close control. */
+/** Tabs meet the content surface and reserve space for the close control. */
 .cu-tabs {
   display: flex;
   gap: var(--ui-xs);
-  padding: var(--ui-xs);
+  padding: var(--ui-xs) var(--ui-xs) 0;
   background: var(--ui-toolbar);
 }
 
@@ -10,8 +10,7 @@
   flex: none;
   align-items: center;
   padding-inline-end: var(--ui-xs);
-  border: var(--ui-line) solid var(--ui-border);
-  border-radius: var(--ui-radius);
+  border-radius: var(--ui-radius) var(--ui-radius) 0 0;
 }
 
 .cu-document-tab:hover {
@@ -19,19 +18,17 @@
 }
 
 .cu-document-tab:has(> [aria-pressed="true"]) {
-  background-color: var(--ui-selection);
-  color: var(--ui-selected);
+  background-color: var(--ui-tab-surface, var(--ui-editor));
 }
 
-.cu-document-tab > button {
-  color: inherit;
-}
-
-.cu-document-tab > [aria-pressed] {
+.cu-document-tab > .cu-button[aria-pressed] {
   padding-inline-end: var(--ui-xs);
   background-color: transparent;
 }
 
-.cu-document-tab > [data-size="icon-xs"]:hover {
-  background-color: var(--ui-toolbar);
+@media (hover: hover) {
+  .cu-document-tab:not(:is(:hover, :focus-within, :has(> [aria-pressed="true"])))
+    > [data-size="icon-xs"] {
+    opacity: 0;
+  }
 }

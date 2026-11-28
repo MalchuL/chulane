@@ -23,11 +23,13 @@ for (const family of [...new Set(registry.map((i) => i.family))]) {
 }
 test("Theme persistence, OS changes and scoped overrides", async ({ page }) => {
   await page.goto("/components/button");
-  const theme = page.getByLabel("Color theme");
-  await theme.selectOption("Dark");
+  const theme = page.getByRole("button", { name: "Color theme" });
+  await theme.click();
+  await page.getByRole("menuitemcheckbox", { name: "Dark", exact: true }).click();
   await page.reload();
-  await expect(theme).toHaveValue("Dark");
-  await theme.selectOption("System");
+  await expect(theme).toHaveText("Dark");
+  await theme.click();
+  await page.getByRole("menuitemcheckbox", { name: "System", exact: true }).click();
   await page.emulateMedia({ colorScheme: "light" });
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await page.emulateMedia({ colorScheme: "dark" });
@@ -82,11 +84,29 @@ test("Palette keyboard search restores focus", async ({ page }) => {
   await expect(search).toBeFocused();
   await expect(search).toHaveCSS("border-top-width", "0px");
   await expect(search).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await search.fill("archive");
+  await expect(page.getByText("No matching commands")).toBeVisible();
+  await search.press("Enter");
+  await expect(search).toBeFocused();
   await search.fill("create");
   await search.press("Enter");
   await expect(page.locator("output")).toHaveText("Create page");
   await expect(trigger).toBeFocused();
 });
+
+test("Command toolbar selects checked actions with the keyboard", async ({ page }) => {
+  await page.goto("/components/command-toolbar");
+  const favorite = page.getByRole("group", { name: "Page actions" }).getByRole("button", {
+    name: "Favorite",
+  });
+  await expect(favorite).toHaveAttribute("aria-pressed", "false");
+  await favorite.focus();
+  await favorite.press("Enter");
+  await expect(favorite).toHaveAttribute("aria-pressed", "true");
+  await favorite.press("Space");
+  await expect(favorite).toHaveAttribute("aria-pressed", "false");
+});
+
 test("Draft survives queued edits and operations reflect host approval", async ({ page }) => {
   await page.goto("/examples/agent-review");
   const proposal = page.locator(".cu-change").first();
@@ -122,9 +142,18 @@ test("Document selection and slash insertion", async ({ page }) => {
   await body.focus();
   await body.press("End");
   await body.press("/");
-  await expect(page.getByRole("combobox", { name: "Find block type" })).toBeFocused();
+  const search = page.getByRole("combobox", { name: "Find block type" });
+  await expect(search).toBeFocused();
   await page.keyboard.type("Checklist");
-  await page.keyboard.press("Enter");
+  await expect(search).toHaveValue("Checklist");
+  await expect(page.getByRole("option", { name: "Paragraph" })).toBeHidden();
+  await search.press("Escape");
+  await expect(body).toBeFocused();
+  await expect(body).toHaveValue("**Field notes**");
+  await body.press("/");
+  await expect(search).toHaveValue("");
+  await search.fill("Checklist");
+  await search.press("Enter");
   await expect(body).toBeFocused();
   await expect(body).toHaveValue(/- \[ \]/);
 });
@@ -138,7 +167,8 @@ for (const theme of ["Light", "Dark"]) {
       "/examples/agent-review",
     ]) {
       await page.goto(path);
-      await page.getByLabel("Color theme").selectOption(theme);
+      await page.getByRole("button", { name: "Color theme" }).click();
+      await page.getByRole("menuitemcheckbox", { name: theme, exact: true }).click();
       // Contrast belongs to the selected theme after its color transitions settle.
       await page.evaluate(async () => {
         await new Promise(requestAnimationFrame);
@@ -167,7 +197,8 @@ for (const theme of ["Light", "Dark"]) {
 
 test("A locally themed portal retains the trigger's token scope", async ({ page }) => {
   await page.goto("/components/theme-scope");
-  await page.getByLabel("Color theme").selectOption("Light");
+  await page.getByRole("button", { name: "Color theme" }).click();
+  await page.getByRole("menuitemcheckbox", { name: "Light", exact: true }).click();
   const scope = page.locator(".catalog-preview [data-theme=dark]");
   await scope.getByRole("button", { name: "Inspect appearance" }).click();
   const overlay = scope.getByRole("dialog", { name: "Scoped appearance" });
@@ -297,24 +328,59 @@ test("Mode, model and context stay inside the composer", async ({ page }) => {
   await (
     await chooser
   ).setFiles({ name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("Notes") });
-  await page.getByRole("button", { name: "Remove notes.txt" }).click();
-  await expect(page.getByRole("button", { name: "Remove notes.txt" })).toHaveCount(0);
+  const removeAttachment = page.getByRole("button", { name: "Remove notes.txt" });
+  await expect(removeAttachment).toHaveCSS("opacity", "1");
+  await removeAttachment.click();
+  await expect(removeAttachment).toHaveCount(0);
+
+  const composer = page.locator(".cu-composer");
+  await composer.evaluate((element) => {
+    element.style.inlineSize = "190px";
+  });
+  const labels = composer.locator(".cu-composer-option-label");
+  await labels.evaluateAll((elements) => {
+    for (const label of elements) {
+      label.textContent += " with a long workspace-specific name";
+    }
+  });
+  await expect(labels.last()).toHaveCSS("text-overflow", "ellipsis");
+  expect(
+    await labels
+      .last()
+      .evaluate((label) => label.clientWidth > 0 && label.scrollWidth > label.clientWidth),
+  ).toBe(true);
+  expect(
+    await composer.evaluate((element) => {
+      const { left, right } = element.getBoundingClientRect();
+      return Array.from(
+        element.querySelectorAll(".cu-toolbar button, [data-slot=attachment]"),
+      ).every((control) => {
+        const bounds = control.getBoundingClientRect();
+        return bounds.left >= left && bounds.right <= right;
+      });
+    }),
+  ).toBe(true);
 });
 test("Change summaries collapse on apply and preserve undo per row", async ({ page }) => {
   await page.goto("/components/change-review");
   const review = page.getByRole("region", { name: "Change review" });
   const first = review.getByRole("article").first();
-  await expect(review).toContainText("2/3 applied");
+  const toggle = review.getByRole("button", { name: "Changes" });
+  await expect(review).toContainText("2/3 reviewed");
   await first.getByLabel("View diff").click();
   await expect(first.locator(".cu-add")).toBeVisible();
   await first.getByRole("button", { name: "Apply change" }).click();
   await expect(first.locator(".cu-add")).toBeHidden();
-  await expect(review).toContainText("3/3 applied");
-  await review.getByRole("button", { name: "Collapse changes" }).click();
+  await expect(review).toContainText("3/3 reviewed");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
   await expect(review.getByRole("article")).toHaveCount(0);
-  await review.getByRole("button", { name: "Expand changes" }).click();
+  await toggle.click();
   await first.getByRole("button", { name: "Undo" }).click();
-  await expect(review).toContainText("2/3 applied");
+  await expect(review).toContainText("2/3 reviewed");
+  // Dismissal resolves a change too, so the counter still reaches completion.
+  await first.getByRole("button", { name: "Dismiss" }).click();
+  await expect(review).toContainText("3/3 reviewed");
 });
 test("Selection floats outside the text flow and block actions move paragraphs", async ({
   page,
@@ -336,6 +402,26 @@ test("Selection floats outside the text flow and block actions move paragraphs",
   await expect(field).toHaveValue(/At dusk/);
 });
 
+test("Block controls center on the first text line", async ({ page }) => {
+  await page.goto("/components/block-controls");
+  const block = page.locator(".cu-block").first();
+  await block.hover();
+  const grip = block.getByRole("button", { name: "Block actions", exact: true });
+  await grip.press("Enter");
+  await expect(page.getByRole("menu", { name: "Block actions", exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(grip).toBeFocused();
+  const controls = await block.locator(".cu-block-controls").boundingBox();
+  const more = await block.locator(".cu-block-more").boundingBox();
+  const firstLine = await block.evaluate((el) => {
+    const top = el.getBoundingClientRect().top + parseFloat(getComputedStyle(el).paddingTop);
+    return top + parseFloat(getComputedStyle(el).lineHeight) / 2;
+  });
+  // One pixel of tolerance absorbs subpixel rounding of 1lh.
+  expect(Math.abs(controls!.y + controls!.height / 2 - firstLine)).toBeLessThanOrEqual(1);
+  expect(Math.abs(more!.y + more!.height / 2 - firstLine)).toBeLessThanOrEqual(1);
+});
+
 test("Checkbox supports mixed state, keyboard and disabled state", async ({ page }) => {
   await page.goto("/components/checkbox");
   const control = page.getByRole("checkbox", { name: "Show recent pages" });
@@ -343,7 +429,53 @@ test("Checkbox supports mixed state, keyboard and disabled state", async ({ page
   await control.focus();
   await page.keyboard.press("Space");
   await expect(control).toBeChecked();
-  await expect(page.getByRole("checkbox", { name: "Read-only preference" })).toBeDisabled();
+  const disabled = page.getByRole("checkbox", { name: "Read-only preference" });
+  await expect(disabled).toBeDisabled();
+  await expect(disabled).toBeChecked();
+});
+
+test("Foundation fields report values and feedback offers recovery", async ({ page }) => {
+  await page.goto("/components/search-field");
+  await page.getByRole("searchbox", { name: "Search documents" }).fill("atlas");
+  await expect(page.getByText("Research atlas", { exact: true })).toBeVisible();
+
+  await page.goto("/components/text-area");
+  const draft = page.getByRole("textbox", { name: "Journal entry" });
+  await draft.fill("Field notes\nSecond line");
+  await expect(draft).toHaveValue("Field notes\nSecond line");
+
+  await page.goto("/components/feedback");
+  const preview = page.locator(".catalog-preview");
+  const status = page.getByRole("combobox", { name: "State" });
+  await status.selectOption("loading");
+  await expect(preview.getByRole("status").filter({ hasText: "Loading pages" })).toBeVisible();
+  await status.selectOption("error");
+  await expect(preview.getByRole("alert")).toContainText("Could not load pages");
+  await preview.getByRole("button", { name: "Retry" }).click();
+  await expect(preview.getByRole("status")).toContainText("No pages yet");
+});
+
+test("Foundation overlays focus their contents and restore the trigger", async ({ page }) => {
+  await page.goto("/components/dialog");
+  const trigger = page.getByRole("button", { name: "Show properties" });
+  await trigger.click();
+  const dialog = page.getByRole("dialog", { name: "Page properties" });
+  await expect(dialog.getByRole("heading")).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await expect(trigger).toBeFocused();
+
+  await page.goto("/components/confirm-action");
+  const remove = page.getByRole("button", { name: "Remove attachment" });
+  const confirmation = page.getByRole("alertdialog", { name: "Remove attachment?" });
+  await remove.click();
+  const cancel = confirmation.getByRole("button", { name: "Cancel" });
+  await expect(cancel).toBeFocused();
+  await cancel.click();
+  await expect(remove).toBeFocused();
+  await remove.click();
+  await confirmation.getByRole("button", { name: "Remove", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Undo removal" })).toBeVisible();
 });
 
 test("Closing a project preserves collection expansion and page selection", async ({ page }) => {
@@ -378,12 +510,39 @@ test("Button group switches spacing without resetting its actions", async ({ pag
   await expect(group).toContainText("110%");
 });
 
+test("Segmented control keeps a selection and accepts keyboard changes", async ({ page }) => {
+  await page.goto("/components/segmented-control");
+  const control = page.getByRole("radiogroup", { name: "Navigation mode" });
+  const standard = control.getByRole("radio", { name: "Standard" });
+  const expanded = control.getByRole("radio", { name: "Expanded" });
+  await standard.click();
+  await expect(standard).toBeChecked();
+  await standard.press("ArrowRight");
+  await expect(expanded).toBeFocused();
+  await expanded.press("Space");
+  await expect(expanded).toBeChecked();
+});
+
+test("Foundation controls size normal and compact icons from their tokens", async ({ page }) => {
+  await page.goto("/components/chip");
+  await page.addStyleTag({
+    content: ":root { font-size: 20px; --ui-icon: 1.375rem; --ui-icon-sm: 0.75rem; }",
+  });
+  const copyIcon = page.getByRole("button", { name: "Copy example" }).locator("svg");
+  const remove = page.getByRole("button", { name: "Remove Field notes" });
+  await expect(copyIcon).toHaveCSS("width", "27.5px");
+  await expect(copyIcon).toHaveCSS("stroke-width", "1.7px");
+  await expect(remove.locator("svg")).toHaveCSS("width", "15px");
+  await remove.click();
+  await expect(page.getByRole("button", { name: "Attach Field notes" })).toBeVisible();
+});
+
 test("Sent messages share one scroll viewport and support return to latest", async ({ page }) => {
   await page.goto("/components/agent-panel");
   const viewport = page.locator('[data-slot="message-scroller-viewport"]');
   for (let i = 0; i < 9; i++) {
     await page.getByRole("textbox", { name: "Message" }).fill("Research note " + i);
-    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await page.getByRole("button", { name: "Send message", exact: true }).click();
   }
   await expect(viewport.locator('[data-slot="message-scroller-item"]')).toHaveCount(10);
   await expect.poll(() => viewport.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
@@ -485,7 +644,14 @@ test("Workspace footer controls sit on one line near the panel edges", async ({ 
       }),
       control,
     );
-    expect(gap.actual).toBeLessThanOrEqual(gap.expected + 1);
+    if (control === ".cu-composer") {
+      const gutter = await page
+        .locator(panel)
+        .evaluate((el) => getComputedStyle(el).getPropertyValue("--ui-panel-gutter"));
+      expect(gap.actual).toBe(parseFloat(gutter));
+    } else {
+      expect(gap.actual).toBeLessThanOrEqual(gap.expected + 1);
+    }
   }
 });
 
@@ -494,7 +660,8 @@ test("Resizing the workspace keeps scrolling inside the sidebar and transcript",
 }) => {
   await page.setViewportSize({ width: 2480, height: 1280 });
   await page.goto("/examples/knowledge-workspace");
-  await page.getByLabel("Color theme").selectOption("Dark");
+  await page.getByRole("button", { name: "Color theme" }).click();
+  await page.getByRole("menuitemcheckbox", { name: "Dark", exact: true }).click();
   for (const size of [
     { width: 2480, height: 1280 },
     { width: 1440, height: 720 },
@@ -568,15 +735,28 @@ test("Compact navigation reaches a nested project page", async ({ page }) => {
 for (const theme of ["Dark", "Light"]) {
   test("Review diff and host tool output in " + theme, async ({ page }) => {
     await page.goto("/components/change-review");
-    await page.getByLabel("Color theme").selectOption(theme);
+    await page.getByRole("button", { name: "Color theme" }).click();
+    await page.getByRole("menuitemcheckbox", { name: theme, exact: true }).click();
     await page.getByRole("button", { name: "View diff" }).first().click();
     await expect(page.locator(".cu-add").first()).toBeVisible();
+    await page.goto("/components/change-diff");
+    const diffTrigger = page.getByRole("button", { name: "View diff" });
+    await diffTrigger.press("Enter");
+    await expect(page.getByText("− We took notes.", { exact: true })).toBeVisible();
+    await expect(
+      page.getByText("+ We documented the trail conditions.", { exact: true }),
+    ).toBeVisible();
     await page.goto("/components/activity-trace");
     await page.getByRole("button", { name: "Activity (4)" }).click();
     await page.getByRole("button", { name: /Read entry/ }).click();
     await expect(
       page.getByText("Mist gathered along the ridgeline.", { exact: true }),
     ).toBeVisible();
+    await page.goto("/components/inline-citation");
+    const citation = page.getByRole("link", { name: "Field notes", exact: true });
+    await expect(citation).toHaveAttribute("href", "/examples/document-editor");
+    await citation.focus();
+    await expect(page.getByText("Observations from the northern trail.")).toBeVisible();
   });
 }
 

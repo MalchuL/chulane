@@ -1,0 +1,27 @@
+/** Activity trace rows and expandable step details. */
+.cu-trace {
+  color: var(--ui-muted);
+}
+.cu-trace ol {
+  padding-inline-start: var(--ui-lg);
+  list-style: decimal;
+}
+.cu-trace [data-slot="trace-collapsible-trigger"] {
+  min-block-size: var(--ui-row-compact);
+  padding-inline: 0 var(--ui-row-padding);
+  gap: var(--ui-row-gap);
+  border-radius: var(--ui-radius);
+}
+.cu-trace .cu-agent-disclosure[data-slot="trace-collapsible-trigger"] {
+  padding-inline: var(--ui-row-padding);
+  /* Match the Changes header inset, including the card and button borders. */
+  padding-inline-start: calc(var(--ui-row-padding) + 2 * var(--ui-line));
+}
+.cu-trace [data-slot="trace-collapsible-trigger"]:hover {
+  background: var(--ui-hover);
+}
+.cu-trace pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--ui-mono);
+}

@@ -1,5 +1,5 @@
 /** Live Dialog usage, also displayed as source in the catalog. */
-import { Button, Badge, Dialog } from "chulane_ui";
+import { Button, Badge, Dialog } from "@chulane/ui";
 
 export default function Example() {
   return (

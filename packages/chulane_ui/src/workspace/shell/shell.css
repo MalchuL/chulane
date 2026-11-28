@@ -86,3 +86,19 @@
 .cu-shell-main > [data-slot="scroll-area"] {
   height: 100%;
 }
+
+.cu-shell-main [data-slot="scroll-area-viewport"] > div:has(> .cu-panel),
+.cu-split [data-slot="scroll-area-viewport"] > div:has(> .cu-panel) {
+  min-block-size: 100%;
+  /* Radix sets display: table inline on its content wrapper. */
+  display: flex !important;
+  flex-direction: column;
+}
+.cu-shell-main [data-slot="scroll-area-viewport"] > div > .cu-panel {
+  flex: 1;
+  border: 0;
+  border-radius: 0;
+}
+.cu-shell-header > .cu-group {
+  gap: var(--ui-xs);
+}

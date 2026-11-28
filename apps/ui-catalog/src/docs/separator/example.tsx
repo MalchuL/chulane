@@ -1,5 +1,5 @@
 /** Live Separator usage, also displayed as source in the catalog. */
-import { Separator } from "chulane_ui";
+import { Separator } from "@chulane/ui";
 
 export default function Example() {
   const stackClassName = "cu-stack";

@@ -1,0 +1,48 @@
+/** Panel layout, transcript viewport and scroller controls. */
+.cu-agent {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ui-sm);
+  padding: var(--ui-sm) var(--ui-panel-gutter);
+  background: var(--ui-sidebar);
+}
+.cu-dialog .cu-agent {
+  max-height: min(var(--ui-shell-height), var(--ui-agent-overlay-max));
+}
+.cu-log {
+  overflow: hidden;
+  flex: 1;
+  min-height: 0;
+}
+/* Keep the thumb visible while MessageScroller follows new content. */
+.cu-log > [data-slot="message-scroller-viewport"] {
+  @apply scroll-fade-y;
+  /* Override the bottom-only mask supplied by the viewport primitive. */
+  --scroll-fade-mask: var(--scroll-fade-block);
+  --scroll-fade-t-size: var(--ui-lg);
+
+  scrollbar-color: var(--ui-muted) transparent;
+}
+.cu-log [data-slot="message-scroller-content"] {
+  justify-content: safe end;
+}
+.cu-agent > header {
+  border-bottom: var(--ui-line) solid var(--ui-border);
+  padding-bottom: var(--ui-sm);
+}
+.cu-agent:has(> .cu-composer-form) {
+  padding-block-end: var(--ui-panel-gutter);
+}
+.cu-log [data-slot="message-scroller-button"] {
+  min-width: var(--ui-control-xs);
+  min-height: var(--ui-control-xs);
+}
+.cu-agent > header > strong {
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+.cu-agent > header > svg:first-child {
+  color: var(--ui-accent);
+}

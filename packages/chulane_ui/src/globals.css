@@ -12,9 +12,23 @@
 @import "./navigation/sidebar/sidebar.css";
 @import "./navigation/workspace-switcher/workspace-switcher.css";
 @import "./navigation/file-tree/file-tree.css";
-@import "./document/surface/document.css";
+@import "./document/surface/surface.css";
+@import "./document/document-properties/document-properties.css";
+@import "./document/breadcrumbs/breadcrumbs.css";
+@import "./document/document-image/document-image.css";
+@import "./document/page-row/page-row.css";
+@import "./document/page-browser/page-browser.css";
+@import "./document/selection-toolbar/selection-toolbar.css";
+@import "./document/block-controls/block-controls.css";
+@import "./document/slash-menu/slash-menu.css";
 @import "./document/document-tabs/document-tabs.css";
-@import "./agent/panel/agent.css";
+@import "./agent/panel/panel.css";
+@import "./agent/message/message.css";
+@import "./agent/composer/composer.css";
+@import "./agent/change-review/change-review.css";
+@import "./agent/change-diff/change-diff.css";
+@import "./agent/activity-trace/activity-trace.css";
+@import "./agent/message-queue/message-queue.css";
 
 /* shadcn registry components resolve their Tailwind utilities through these tokens. */
 @custom-variant dark (&:where(.dark, .dark *, [data-theme="dark"], [data-theme="dark"] *));

@@ -1,9 +1,9 @@
 /** Displays the running example, its original source and the public TypeScript contract. */
-import { ScrollArea } from "chulane_ui";
+import { ScrollArea } from "@chulane/ui";
 import { useState } from "react";
 import type { ComponentType } from "react";
 import { Check, Copy } from "lucide-react";
-import { IconButton, SegmentedControl } from "chulane_ui";
+import { IconButton, SegmentedControl } from "@chulane/ui";
 import api from "virtual:component-api";
 import type { registry } from "./registry";
 import { notes } from "./interaction-notes";
@@ -48,7 +48,7 @@ export function ComponentPage({ item }: { item: (typeof registry)[number] }) {
           label="Example view"
           value={tab}
           options={["Preview", "Code"]}
-          onChange={setTab}
+          onValueChange={setTab}
         />
         <IconButton
           label="Copy example"

@@ -24,6 +24,14 @@ export const notes: Record<string, [string, string]> = {
     "icon,control,hover,focus",
     "Tab exposes the accessible label as a tooltip. Space or Enter runs the action.",
   ],
+  Tooltip: [
+    "raised,text,shadow,card-radius",
+    "Tab to the trigger to show its description. Escape dismisses the tooltip and keeps focus in place.",
+  ],
+  TooltipProvider: [
+    "raised,text",
+    "Tab between triggers to show each tooltip immediately. Timing settings apply to pointer hover.",
+  ],
   ButtonGroup: ["xs,control", "Tab moves between child controls in document order."],
   SearchField: [
     "control,border,raised,text",

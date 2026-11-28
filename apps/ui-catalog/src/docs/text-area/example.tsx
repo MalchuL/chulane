@@ -1,6 +1,6 @@
 /** Live TextArea usage, also displayed as source in the catalog. */
 import { useState } from "react";
-import { TextArea } from "chulane_ui";
+import { TextArea } from "@chulane/ui";
 
 export default function Example() {
   const [text, setText] = useState("");
@@ -9,7 +9,7 @@ export default function Example() {
       label="Journal entry"
       placeholder="Write an observation…"
       value={text}
-      onChange={(e) => setText(e.target.value)}
+      onValueChange={setText}
     />
   );
 }

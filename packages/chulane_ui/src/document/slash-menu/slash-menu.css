@@ -1,0 +1,4 @@
+/** Fit the inline block picker to the editor column. */
+.cu-slash-menu {
+  min-inline-size: min(100%, var(--ui-menu-width));
+}

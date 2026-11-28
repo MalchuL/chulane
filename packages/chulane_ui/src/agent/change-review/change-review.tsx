@@ -1,116 +1,69 @@
-/** change review presentation and interaction contract. */
-import { Button } from "../../foundation/button/button.js";
-import { ButtonGroup } from "../../foundation/button-group/button-group.js";
-
-import {
-  Collapsible,
-  CollapsibleTrigger,
-  CollapsibleContent,
-} from "../../components/ui/collapsible.js";
-import { Item } from "../../components/ui/item.js";
-
-import { ChangeDiff } from "../change-diff/change-diff.js";
-import type { ChangeReviewProps } from "./types.js";
+/** Hosts the review disclosure and renders host-owned proposals in order. */
+import { cn } from "cn";
+import { ChevronDown, ChevronRight, ListChecks } from "lucide-react";
 import { useState } from "react";
 import {
-  ListChecks,
-  Check,
-  X,
-  FilePenLine,
-  CircleCheck,
-  CircleX,
-  Undo2,
-  RotateCw,
-  ChevronDown,
-  ChevronRight,
-} from "lucide-react";
-import { IconButton } from "../../foundation/icon-button/icon-button.js";
-
-export type { ChangeStatus, ProposedChange, ChangeReviewProps } from "./types.js";
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "../../components/ui/collapsible.js";
+import { Button } from "../../foundation/button/button.js";
+import { ChangeReviewRow, isReviewed } from "./parts.js";
+import type { ChangeReviewProps } from "./types.js";
 
 /**
- * Inspect a diff and let the host confirm apply, dismiss or undo.
- * @param props Presentation values and host callbacks described by the public props type.
- * @returns The rendered ChangeReview view.
+ * Displays proposed edits with expandable diffs and review actions.
+ *
+ * The host owns the proposals, their statuses and the effects of applying,
+ * dismissing or undoing them. The panel owns disclosure state and derives the
+ * reviewed count from the host's statuses. Action groups inherit the theme layout.
+ *
+ * @param props Proposals, host callbacks and root section attributes.
+ * @returns An initially expanded review panel.
+ * @example
+ * <ChangeReview
+ *   changes={[{ id: "intro", summary: "Clarify the opening", target: { label: "Field notes" },
+ *     status: "pending", before: "Head north.", after: "Follow the northern ridge." }]}
+ *   onApply={(id) => applyChange(id)}
+ *   onDismiss={(id) => dismissChange(id)}
+ * />
  */
 export function ChangeReview({
   changes,
-  buttonLayout,
   onApply,
   onDismiss,
   onUndo,
+  className,
+  ...rest
 }: ChangeReviewProps) {
   const [open, setOpen] = useState(true);
-  const review = "cu-review";
-  const row = "cu-change";
-  const line = "cu-change-row";
-  const labels = "cu-change-label";
-  const meta = "cu-meta";
+  const reviewClassName = "cu-review";
+  const headerClassName = "cu-change-row cu-review-disclosure";
+  const countClassName = "cu-meta";
+  const reviewed = changes.filter((change) => isReviewed(change.status)).length;
   return (
     <Collapsible asChild open={open} onOpenChange={setOpen}>
-      <section className={review} aria-label="Change review">
-        <header className={line}>
-          <CollapsibleTrigger asChild>
-            <Button variant="ghost" aria-label={open ? "Collapse changes" : "Expand changes"}>
-              {open ? <ChevronDown /> : <ChevronRight />}
-              <ListChecks aria-hidden />
-              Changes
-            </Button>
-          </CollapsibleTrigger>
-          <small className={meta}>
-            {changes.filter((c) => c.status === "applied").length}/{changes.length} applied
-          </small>
-        </header>
+      <section aria-label="Change review" {...rest} className={cn(reviewClassName, className)}>
+        <CollapsibleTrigger asChild>
+          <Button variant="ghost" className={headerClassName}>
+            {open ? <ChevronDown aria-hidden /> : <ChevronRight aria-hidden />}
+            <ListChecks aria-hidden />
+            Changes
+            <small className={countClassName}>
+              {reviewed}/{changes.length} reviewed
+            </small>
+          </Button>
+        </CollapsibleTrigger>
         <CollapsibleContent>
-          {changes.map((c) => {
-            const complete = c.status === "applied" || c.status === "dismissed";
-            let StatusIcon = FilePenLine;
-            if (c.status === "applied") {
-              StatusIcon = CircleCheck;
-            } else if (c.status === "dismissed") {
-              StatusIcon = CircleX;
-            }
-            return (
-              <Item asChild key={c.id}>
-                <article className={row} data-status={c.status}>
-                  <div className={line}>
-                    <StatusIcon aria-hidden />
-                    <div className={labels}>
-                      <strong>{c.summary}</strong>
-                      <small className={meta}>
-                        {c.target.href ? (
-                          <a href={c.target.href}>{c.target.label}</a>
-                        ) : (
-                          c.target.label
-                        )}{" "}
-                        · <span role="status">{c.status}</span>
-                      </small>
-                    </div>
-                    {(c.status === "pending" || c.status === "failed") && (
-                      <ButtonGroup label="Review actions" buttonLayout={buttonLayout}>
-                        <IconButton
-                          label={c.status === "failed" ? "Retry" : "Apply change"}
-                          onClick={() => onApply(c.id)}
-                        >
-                          {c.status === "failed" ? <RotateCw /> : <Check />}
-                        </IconButton>
-                        <IconButton label="Dismiss" onClick={() => onDismiss(c.id)}>
-                          <X />
-                        </IconButton>
-                      </ButtonGroup>
-                    )}
-                    {complete && onUndo && (
-                      <IconButton label="Undo" onClick={() => onUndo(c.id)}>
-                        <Undo2 />
-                      </IconButton>
-                    )}
-                  </div>
-                  {c.error && <p role="alert">{c.error}</p>}
-                  <ChangeDiff compact key={c.status} before={c.before} after={c.after} />
-                </article>
-              </Item>
-            );
-          })}
+          {changes.map((change) => (
+            <ChangeReviewRow
+              key={change.id}
+              change={change}
+              onApply={onApply}
+              onDismiss={onDismiss}
+              onUndo={onUndo}
+            />
+          ))}
         </CollapsibleContent>
       </section>
     </Collapsible>

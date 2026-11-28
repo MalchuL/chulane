@@ -1,8 +1,9 @@
 /** Working composition of navigation, page library and a local agent. */
 import { DemoPanels } from "./demo-panels";
+import type { DemoWorkspaceLayout } from "./demo-panels";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
-  Command as CommandIcon,
+  Search,
   Menu,
   Plus,
   Files,
@@ -52,24 +53,37 @@ import {
   ConfirmAction,
   ActionMenu,
   IconButton,
-  initialLayout,
-  defaultSidebar,
-  useStoredPreference,
+  createDefaultSidebarPreferences,
   useTheme,
   Dialog,
   SearchField,
   Button,
   type Command,
-  type WorkspaceLayout,
   type SidebarPreferences,
   type PageSummary,
   type MenuEntry,
-} from "chulane_ui";
-import { pages as initialPages, sections, reference, workspaceOptions } from "../fixtures";
+} from "@chulane/ui";
+import { useStoredPreference } from "./hooks";
+import { pages as samplePages, sections, reference, workspaceOptions } from "../fixtures";
 import { DocumentEditor } from "../document-editor/document-editor";
 import { AgentReview } from "../agent-review/agent-review";
+const initialPages = samplePages.map((page) => {
+  if (page.id === "field-notes") {
+    return { ...page, thumbnail: { src: "/field-study.svg" } };
+  }
+  if (page.id === "atlas") {
+    return { ...page, thumbnail: { emoji: "🧭" } };
+  }
+  return page;
+});
 const destinationIcons = [Files, NotebookPen, Tags, Trash2, Folders, House];
 const destinations = ["All pages", "Journal", "Tags", "Trash", "Projects", "Overview"];
+const initialLayout: DemoWorkspaceLayout = {
+  navigation: true,
+  agent: true,
+  focus: false,
+  split: false,
+};
 const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object";
 function sidebarPrefs(v: unknown): v is SidebarPreferences {
   return (
@@ -80,7 +94,7 @@ function sidebarPrefs(v: unknown): v is SidebarPreferences {
     )
   );
 }
-function layoutPrefs(v: unknown): v is WorkspaceLayout {
+function layoutPrefs(v: unknown): v is DemoWorkspaceLayout {
   return (
     isRecord(v) &&
     ["navigation", "agent", "focus", "split"].every((k) => typeof v[k] === "boolean") &&
@@ -98,11 +112,11 @@ export function KnowledgeWorkspace({
   const [font, setFont] = useState("Geist");
   const [scale, setScale] = useState("Standard");
   const [setting, setSetting] = useState("");
-  const panelStackClassName = "cu-panel cu-stack";
+  const panelStackClassName = "cu-panel cu-stack catalog-page-placeholder";
 
   const [prefs, savePrefs] = useStoredPreference(
     "catalog.sidebar",
-    defaultSidebar(sections),
+    createDefaultSidebarPreferences(sections),
     sidebarPrefs,
   );
   const [layout, saveLayout] = useStoredPreference("catalog.layout", initialLayout, layoutPrefs);
@@ -164,11 +178,11 @@ export function KnowledgeWorkspace({
     setSelected(destinations.includes(id) ? "" : id);
     setDestination(destinations.includes(id) ? id : "Page");
   }
-  function create(collection: string, title?: string, preview = "") {
+  function create(collection: string, title?: string, description = "") {
     const page = {
       id: crypto.randomUUID(),
       title: title ?? "Untitled " + (collection === "Pages" ? "page" : collection),
-      preview,
+      description,
       date: new Date().toISOString().slice(0, 10),
       collection,
     };
@@ -178,7 +192,7 @@ export function KnowledgeWorkspace({
   }
   function downloadPage(page: PageSummary, markdown: boolean) {
     const link = document.createElement("a");
-    const text = (markdown ? "# " : "") + page.title + "\n\n" + (page.preview ?? "");
+    const text = (markdown ? "# " : "") + page.title + "\n\n" + (page.description ?? "");
     const url = URL.createObjectURL(
       new Blob([text], { type: markdown ? "text/markdown" : "text/plain" }),
     );
@@ -193,7 +207,7 @@ export function KnowledgeWorkspace({
         id: "properties",
         label: "Properties",
         icon: ListTree,
-        run: () => {
+        onSelect: () => {
           open(page.id);
           setSetting("Properties");
         },
@@ -203,13 +217,13 @@ export function KnowledgeWorkspace({
         icon: Pencil,
         shortcut: "F2",
         label: "Rename",
-        run: () => setRename(page),
+        onSelect: () => setRename(page),
       },
       {
         id: "duplicate",
         icon: Copy,
         label: "Duplicate",
-        run: () =>
+        onSelect: () =>
           setPages([...pages, { ...page, id: crypto.randomUUID(), title: page.title + " copy" }]),
       },
       {
@@ -217,14 +231,14 @@ export function KnowledgeWorkspace({
         icon: Star,
         label: "Favorite",
         checked: !!page.favorite,
-        run: () =>
+        onSelect: () =>
           setPages(pages.map((p) => (p.id === page.id ? { ...p, favorite: !p.favorite } : p))),
       },
       {
         id: "link",
         icon: Link,
         label: "Copy link",
-        run: () =>
+        onSelect: () =>
           void navigator.clipboard.writeText(
             location.origin + "/examples/knowledge-workspace#" + page.id,
           ),
@@ -233,14 +247,14 @@ export function KnowledgeWorkspace({
         id: "export",
         icon: Download,
         label: "Export",
-        run: () => downloadPage(page, false),
+        onSelect: () => downloadPage(page, false),
       },
       {
         id: "trash",
         icon: Trash2,
         destructive: true,
         label: "Move to trash",
-        run: () => setTrash(page),
+        onSelect: () => setTrash(page),
       },
     ];
   }
@@ -258,20 +272,20 @@ export function KnowledgeWorkspace({
     id: "create-" + c,
     label: "Create " + { Pages: "page", Journal: "journal entry", Projects: "project" }[c],
     group: "Create",
-    run: () => create(c),
+    onSelect: () => create(c),
   }));
   createCommands.push(
     {
       id: "template",
       label: "From meeting notes template",
       group: "Create",
-      run: () => create("Pages", "Meeting notes", "Agenda\n\nDecisions\n\nNext steps"),
+      onSelect: () => create("Pages", "Meeting notes", "Agenda\n\nDecisions\n\nNext steps"),
     },
     {
       id: "import",
       label: "Import text or Markdown",
       group: "Create",
-      run: () => {
+      onSelect: () => {
         const input = document.createElement("input");
         input.type = "file";
         input.accept = ".txt,.md,text/plain,text/markdown";
@@ -300,7 +314,7 @@ export function KnowledgeWorkspace({
       }[key],
       group: "View",
       checked: layout[key],
-      run: () => saveLayout({ ...layout, [key]: !layout[key] }),
+      onSelect: () => saveLayout({ ...layout, [key]: !layout[key] }),
     }),
   );
   const appearance: Command[] = (["light", "dark", "system"] as const).map((t) => ({
@@ -308,7 +322,7 @@ export function KnowledgeWorkspace({
     label: t[0].toUpperCase() + t.slice(1),
     group: "Appearance",
     checked: theme.preference === t,
-    run: () => theme.setPreference(t),
+    onSelect: () => theme.setPreference(t),
   }));
   const navSections = sections.map((section) => {
     let items;
@@ -338,13 +352,13 @@ export function KnowledgeWorkspace({
       id: "graph",
       label: "Graph view",
       icon: Network,
-      run: () => setSetting("Graph view"),
+      onSelect: () => setSetting("Graph view"),
     },
     {
       id: "Editor layout",
       label: "Editor layout",
       icon: Settings2,
-      run: () => setSetting("Editor layout"),
+      onSelect: () => setSetting("Editor layout"),
     },
   ];
   const preferences = [
@@ -383,7 +397,7 @@ export function KnowledgeWorkspace({
       id: label,
       label,
       icon,
-      run: () => setSetting(label),
+      onSelect: () => setSetting(label),
     })),
   ];
   const groups = [
@@ -405,13 +419,13 @@ export function KnowledgeWorkspace({
       id: label,
       label,
       group: "Go to",
-      run: () => open(label),
+      onSelect: () => open(label),
     })),
     ...pages.map((p) => ({
       id: "destination/page/" + p.id,
       label: p.title,
       group: "Pages",
-      run: () => open(p.id),
+      onSelect: () => open(p.id),
     })),
   ];
   useEffect(() => {
@@ -446,7 +460,7 @@ export function KnowledgeWorkspace({
         mainContent = (
           <div className={panelStackClassName}>
             <h2>{page.title}</h2>
-            <p>{page.preview}</p>
+            <p>{page.description}</p>
             <ActionMenu
               label="Page options"
               trigger={<Button variant="outline">Page options</Button>}
@@ -471,7 +485,7 @@ export function KnowledgeWorkspace({
             selected={selected}
             onOpen={open}
             onCreate={() => create(destination === "All pages" ? "Pages" : destination)}
-            actions={actions}
+            getActions={actions}
           />
         );
       }
@@ -514,7 +528,7 @@ export function KnowledgeWorkspace({
                   {
                     id: "markdown",
                     label: "Markdown",
-                    run: () => downloadPage(menuPage, true),
+                    onSelect: () => downloadPage(menuPage, true),
                   },
                 ],
               };
@@ -529,7 +543,7 @@ export function KnowledgeWorkspace({
                   id: value,
                   label: value,
                   checked: value === choices.value,
-                  run: () => choices.change(value),
+                  onSelect: () => choices.change(value),
                 })),
               };
             }
@@ -538,10 +552,20 @@ export function KnowledgeWorkspace({
         })),
       )}
       <WorkspaceShell
-        renderPanels={(panes) => <DemoPanels panes={panes} layout={layout} onLayout={saveLayout} />}
-        mode={prefs.mode}
-        layout={layout}
-        onLayout={saveLayout}
+        renderPanels={(panels) => (
+          <DemoPanels panels={panels} layout={layout} onLayoutChange={saveLayout} />
+        )}
+        sidebarMode={prefs.mode}
+        sidebarOpen={layout.navigation}
+        onSidebarOpenChange={(navigation) => saveLayout({ ...layout, navigation })}
+        agentOpen={layout.agent}
+        onAgentOpenChange={(agent) => saveLayout({ ...layout, agent })}
+        focusMode={layout.focus}
+        onFocusModeChange={(focus) => saveLayout({ ...layout, focus })}
+        splitView={layout.split}
+        onSplitViewChange={(split) => saveLayout({ ...layout, split })}
+        sidebarWidth={layout.navWidth}
+        agentWidth={layout.agentWidth}
         toolbar={
           <>
             <ActionMenu
@@ -561,7 +585,7 @@ export function KnowledgeWorkspace({
                     icon: destinationIcons[i],
                     id: label,
                     label,
-                    run: () => open(label),
+                    onSelect: () => open(label),
                   })),
                 },
                 {
@@ -569,7 +593,7 @@ export function KnowledgeWorkspace({
                   icon: ArrowLeft,
                   label: "Back",
                   disabled: !recent.length,
-                  run: () => {
+                  onSelect: () => {
                     go(recent.at(-1)!);
                     setRecent(recent.slice(0, -1));
                     setFuture([...future, selected || destination]);
@@ -580,7 +604,7 @@ export function KnowledgeWorkspace({
                   icon: ArrowRight,
                   label: "Forward",
                   disabled: !future.length,
-                  run: () => {
+                  onSelect: () => {
                     go(future.at(-1)!);
                     setFuture(future.slice(0, -1));
                     setRecent([...recent, selected || destination]);
@@ -596,21 +620,21 @@ export function KnowledgeWorkspace({
               onOpenChange={setPalette}
               commands={commands}
               trigger={
-                <IconButton label="Search commands">
-                  <CommandIcon />
+                <IconButton label="Search commands" aria-keyshortcuts="Control+K Meta+K">
+                  <Search />
                 </IconButton>
               }
             />
           </>
         }
-        navigation={(compact) => (
+        sidebar={(compact) => (
           <Sidebar
             compact={compact}
             header={
               <WorkspaceSwitcher
                 value={workspace}
                 options={workspaceOptions}
-                onChange={switchWorkspace}
+                onValueChange={switchWorkspace}
               />
             }
             compactHeader={
@@ -618,7 +642,7 @@ export function KnowledgeWorkspace({
                 compact
                 value={workspace}
                 options={workspaceOptions}
-                onChange={switchWorkspace}
+                onValueChange={switchWorkspace}
               />
             }
             destinations={destinations.map((label, i) => ({
@@ -636,19 +660,22 @@ export function KnowledgeWorkspace({
             selected={selected || destination}
             sections={navSections}
             preferences={prefs}
-            onPreferences={savePrefs}
-            onSelect={open}
+            onPreferencesChange={savePrefs}
+            onSelectedChange={open}
             actions={(item) => {
               const p = pages.find((p) => p.id === item.id);
               return p ? actions(p) : [];
             }}
           />
         )}
-        agent={(close) => <AgentReview onClose={close} />}
-        secondary={<DocumentEditor />}
-      >
-        {mainContent}
-      </WorkspaceShell>
+        agent={(close) => (
+          <div data-workspace-agent-pane>
+            <AgentReview onClose={close} />
+          </div>
+        )}
+        secondaryMain={<DocumentEditor />}
+        main={mainContent}
+      />
       <Dialog
         open={!!rename}
         title="Page title"
@@ -671,7 +698,7 @@ export function KnowledgeWorkspace({
             <SearchField
               label="Page title"
               value={rename.title}
-              onChange={(e) => setRename({ ...rename, title: e.target.value })}
+              onValueChange={(title) => setRename({ ...rename, title })}
             />
             <Button type="submit">Save title</Button>
           </form>
@@ -686,7 +713,7 @@ export function KnowledgeWorkspace({
             setTrash(null);
           }
         }}
-        action="Move to trash"
+        confirmLabel="Move to trash"
         onConfirm={() => {
           if (!trash) {
             return;
@@ -744,7 +771,7 @@ export function KnowledgeWorkspace({
               label={choice.label}
               options={choice.options}
               value={choice.value}
-              onChange={choice.change}
+              onValueChange={choice.change}
             />
           ))}
       </Dialog>

@@ -1,6 +1,6 @@
 /** Live Chip usage, also displayed as source in the catalog. */
 import { useState } from "react";
-import { Button, Chip } from "chulane_ui";
+import { Button, Chip } from "@chulane/ui";
 
 export default function Example() {
   const [included, setIncluded] = useState(true);

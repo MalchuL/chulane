@@ -1,46 +1,68 @@
-/** confirm action presentation and interaction contract. */
-import { usePortalHost } from "../theme-scope/hooks.js";
+/** Renders a destructive confirmation in the nearest theme scope. */
+import { cn } from "cn";
 import { AlertDialog as Primitive } from "radix-ui";
-import type { ConfirmActionProps } from "./types.js";
-import { ScrollArea } from "../../components/ui/scroll-area.js";
 import * as UI from "../../components/ui/alert-dialog.js";
-import { ButtonGroup } from "../button-group/button-group.js";
+import { ScrollArea } from "../../components/ui/scroll-area.js";
+import { usePortalHost } from "../theme-scope/hooks.js";
+import type { ConfirmActionProps } from "./types.js";
 
-export type { ConfirmActionProps } from "./types.js";
 /**
- * Confirm a consequential operation before invoking the host callback.
- * @param props Presentation values and host callbacks described by the public props type.
- * @returns The rendered ConfirmAction view.
+ * Ask for explicit confirmation of a destructive action.
+ *
+ * The host owns the operation and can control visibility. Radix focuses the safe
+ * action first and closes the dialog when the user confirms or cancels.
+ *
+ * @param props Confirmation text, action callbacks, open state and panel attributes.
+ * @returns The optional trigger and portaled alert dialog.
+ * @example
+ * <ConfirmAction
+ *   title="Remove attachment?"
+ *   description="This removes the attachment from the page."
+ *   confirmLabel="Remove"
+ *   trigger={<button>Remove attachment</button>}
+ *   onConfirm={removeAttachment}
+ * />
  */
 export function ConfirmAction({
   trigger,
   open,
+  defaultOpen,
   onOpenChange,
   title,
   description,
-  action,
+  confirmLabel,
+  cancelLabel = "Cancel",
   onConfirm,
+  className,
+  ...rest
 }: ConfirmActionProps) {
   const host = usePortalHost();
   const dialogClassName = "cu-dialog";
+  const scrollClassName = "cu-scroll-overlay";
+  const actionsClassName = "cu-confirm-actions";
+  const overlayClassName = "cu-overlay";
 
   return (
-    <UI.AlertDialog open={open} onOpenChange={onOpenChange}>
+    <UI.AlertDialog open={open} defaultOpen={defaultOpen} onOpenChange={onOpenChange}>
       {trigger && <UI.AlertDialogTrigger asChild>{trigger}</UI.AlertDialogTrigger>}
 
       <Primitive.Portal container={host}>
-        <UI.AlertDialogOverlay className="cu-overlay" />
-        <Primitive.Content data-slot="alert-dialog-content" className={dialogClassName}>
+        <UI.AlertDialogOverlay className={overlayClassName} />
+        <Primitive.Content
+          data-slot="alert-dialog-content"
+          {...rest}
+          className={cn(dialogClassName, className)}
+        >
           <UI.AlertDialogTitle>{title}</UI.AlertDialogTitle>
-          <ScrollArea className="cu-scroll-overlay">
+          <ScrollArea className={scrollClassName}>
             <UI.AlertDialogDescription>{description}</UI.AlertDialogDescription>
           </ScrollArea>
-          <ButtonGroup label="Confirmation actions">
-            <UI.AlertDialogCancel>Cancel</UI.AlertDialogCancel>
+          <div role="group" aria-label="Confirmation actions" className={actionsClassName}>
+            <UI.AlertDialogCancel>{cancelLabel}</UI.AlertDialogCancel>
             <UI.AlertDialogAction variant="destructive" onClick={onConfirm}>
-              {action}
+              {confirmLabel}
             </UI.AlertDialogAction>
-          </ButtonGroup>
+          </div>
         </Primitive.Content>
       </Primitive.Portal>
     </UI.AlertDialog>

@@ -13,7 +13,7 @@ Use the latest adaptive sidebar requirements in temp/ui_design/conversation.md, 
 - Document: tabs, breadcrumbs, toolbar, status, metadata, tags, backlinks, attributed images, selection/block/slash actions. Host owns editing and commands.
 - Agent: selectable conversations, rich messages, citations, trace, context chips, multiline draft, modes/models, streaming and cancellation, independent queued edits, grouped review with diff, apply/dismiss/undo and failure recovery.
 - Commands: shared typed definitions for toolbars, palette and Create/Page/View/Appearance/Block/Agent menus; shortcuts, keyboard navigation, focus restoration and reversible destructive actions.
-- Organize by family/component. Local hooks.ts and types.ts when needed; index.ts only re-exports. Publish ESM, declarations, compiled CSS and preserve button/styles.css imports.
+- Organize by family and component. Keep hooks in `hooks.ts`, types in `types.ts`, and only re-exports in `index.ts`. Expose ESM and declarations through `@chulane/ui` and the compiled stylesheet through `@chulane/ui/styles.css`.
 
 ## Demo and verification
 
@@ -31,7 +31,7 @@ Use the original widget markup in source/messages.json, message 7. Match the fou
 
 Delivered sections 4–7 in the [submenu](http://localhost:5273/components/action-menu), [editor](http://localhost:5273/examples/document-editor), [composer](http://localhost:5273/components/agent-composer) and [change review](http://localhost:5273/components/change-review) examples. Verified all 29 Chromium scenarios, including new checks for menu geometry, live appearance changes, selection positioning without layout shift, paragraph reordering, mode/model switching, file context, diff disclosure and per-row undo. Both packages build. Workspace lint, type checks, formatting and all three library tests pass.
 
-The shadcn CLI uses `packages/chulane_ui/components.json` and `src/globals.css`. The radix-nova registry sources for Button, Input and Textarea live in `src/components/ui/`; Chulane's search and multiline fields use these primitives. The catalog imports `chulane_ui/globals.css`.
+The shadcn CLI uses `packages/chulane_ui/components.json` and `src/globals.css`. The radix-nova registry sources for Button, Input and Textarea live in `src/components/ui/`; Chulane's search and multiline fields use these primitives. The catalog imports `@chulane/ui/styles.css`.
 
 ## Миграция на shadcn/ui и AI Elements
 
@@ -63,7 +63,7 @@ The shadcn CLI uses `packages/chulane_ui/components.json` and `src/globals.css`.
 
 ### Сверка с реализацией
 
-Таблица ниже относится к публичному пакету `chulane_ui` и демо `ui-catalog`. Записи о количестве тестов выше отражают предыдущие этапы.
+Таблица ниже относится к публичному пакету `@chulane/ui` и демо `ui-catalog`. Записи о количестве тестов выше отражают предыдущие этапы.
 
 | Область плана | Что использует библиотека | Как проверить поведение |
 |---|---|---|
@@ -75,7 +75,7 @@ The shadcn CLI uses `packages/chulane_ui/components.json` and `src/globals.css`.
 | Композер, история, очередь | InputGroup, Attachment, меню модели и режима, Message/Bubble, MessageScroller, Item и ButtonGroup. Пользовательское сообщение и ответ получают отдельные ID от хоста, ID ответа сохраняется во время стриминга. | В [чате](http://localhost:5273/examples/agent-review) отправить, остановить, отредактировать очередь, перейти в другой разговор и вернуться к черновику. |
 | Источники и работа агента | InlineCitation использует HoverCard, Sources и ActivityTrace — TraceCollapsible. Типизированные события reasoning/tool/task/plan показывают данные, переданные хостом, включая статус и вход/выход инструмента. | Раскрыть Read entry на [странице ActivityTrace](http://localhost:5273/components/activity-trace). |
 | Проверка изменений | Группа и diff используют Collapsible; у каждой правки есть Item, статус и доступные в этом состоянии действия. Счётчик вычисляется по подтверждённому состоянию хоста. | В [ChangeReview](http://localhost:5273/components/change-review) раскрыть diff, применить изменение и отменить его. В примере агента включить ошибку подтверждения и повторить операцию. |
-| Поставка и демонстрация | 45 страниц с JSX-примером, TypeScript API и описанием взаимодействия. Пакет экспортирует ESM, декларации, общий CSS и отдельную точку входа Button. | Пакетные тесты проверяют публичные экспорты, покрытие каталогом и реэкспорты в index.ts; Playwright проходит реальные маршруты и действия. |
+| Поставка и демонстрация | 45 страниц с JSX-примером, TypeScript API и описанием взаимодействия. Пакет экспортирует ESM и декларации через `@chulane/ui`, а общий CSS через `@chulane/ui/styles.css`. | Пакетные тесты проверяют публичные экспорты, покрытие каталогом и реэкспорты в index.ts; Playwright проходит реальные маршруты и действия. |
 
 AI Elements здесь — композиции интерфейса над данными приложения. Поток ответов и операции редактора в каталоге выполняет локальный демонстрационный хост. Семантическая разметка документа (article, figure, figcaption, dl, ссылки) остаётся нативной. Исходный PNG по-прежнему недоступен для попиксельной сверки.
 

@@ -1,6 +1,6 @@
 /** Live Sidebar usage, also displayed as source in the catalog. */
 import { useState } from "react";
-import { Sidebar, defaultSidebar } from "chulane_ui";
+import { Sidebar, createDefaultSidebarPreferences } from "@chulane/ui";
 const sections = [
   { id: "favorites", label: "Favorites", items: [{ id: "field", label: "Field notes" }] },
   {
@@ -12,7 +12,7 @@ const sections = [
 
 export default function Example() {
   const sidebarPreviewClassName = "catalog-sidebar-preview";
-  const [prefs, setPrefs] = useState(defaultSidebar(sections));
+  const [prefs, setPrefs] = useState(createDefaultSidebarPreferences(sections));
   const [selected, setSelected] = useState("");
   return (
     <div className={sidebarPreviewClassName}>
@@ -21,9 +21,9 @@ export default function Example() {
         footer={<small>Local workspace</small>}
         sections={sections}
         preferences={prefs}
-        onPreferences={setPrefs}
+        onPreferencesChange={setPrefs}
         selected={selected}
-        onSelect={setSelected}
+        onSelectedChange={setSelected}
       />
     </div>
   );

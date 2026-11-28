@@ -1,5 +1,5 @@
 /** Live DocumentProperties usage, also displayed as source in the catalog. */
-import { Badge, DocumentProperties } from "chulane_ui";
+import { Badge, DocumentProperties } from "@chulane/ui";
 const reference = { id: "field", label: "Field notes", href: "#field-notes" };
 
 export default function Example() {

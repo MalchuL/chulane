@@ -1,5 +1,5 @@
 /** A bounded library scroll region with native keyboard navigation. */
-import { ScrollArea } from "chulane_ui";
+import { ScrollArea } from "@chulane/ui";
 export default function Example() {
   const frame = "catalog-scroll-demo";
   return (

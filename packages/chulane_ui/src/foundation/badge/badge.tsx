@@ -1,14 +1,17 @@
-/** badge presentation and interaction contract. */
-import { Badge as Tag } from "../../components/ui/badge.js";
-
+/** Compact metadata labels for documents and controls. */
+import { cn } from "cn";
 import type { BadgeProps } from "./types.js";
-export type { BadgeProps } from "./types.js";
 
 /**
- * Label metadata or a state inside a document.
- * @param props Presentation values and host callbacks described by the public props type.
- * @returns The rendered Badge view.
+ * Display a short metadata label or status.
+ *
+ * The host provides the label or status content. Badge provides its visual treatment.
+ * @param props Span attributes and the content to display.
+ * @returns A metadata label.
+ * @example
+ * <Badge>Fieldwork</Badge>
  */
-export function Badge({ children }: BadgeProps) {
-  return <Tag variant="secondary">{children}</Tag>;
+export function Badge({ className, ...rest }: BadgeProps) {
+  const badgeClassName = "cu-badge";
+  return <span {...rest} data-slot="badge" className={cn(badgeClassName, className)} />;
 }

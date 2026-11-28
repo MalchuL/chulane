@@ -1,9 +1,15 @@
-/** Public data and callback contracts for button-group. */
+/** Public layout and DOM contracts for grouped actions. */
+import type { ComponentProps, ReactNode } from "react";
 
-import type { ReactNode } from "react";
+/** Whether adjacent actions share an edge or have a gap. */
 export type ButtonLayout = "grouped" | "separate";
-export type ButtonGroupProps = {
+
+/** Props for a group of related actions. */
+export type ButtonGroupProps = ComponentProps<"div"> & {
+  /** Layout override. Defaults to the nearest theme scope or "grouped". */
   buttonLayout?: ButtonLayout;
+  /** Accessible name of the group. */
   label: string;
+  /** Actions and any supporting content. */
   children: ReactNode;
 };

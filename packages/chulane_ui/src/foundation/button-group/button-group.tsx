@@ -1,30 +1,32 @@
-/** button group presentation and interaction contract. */
+/** Layout and accessible grouping for related actions. */
+import { cn } from "cn";
 import { useContext } from "react";
-import { ButtonLayoutContext } from "../theme-scope/hooks.js";
-
 import { ButtonGroup as Group } from "../../components/ui/button-group.js";
-
+import { ButtonLayoutContext } from "../theme-scope/hooks.js";
 import type { ButtonGroupProps } from "./types.js";
-export type { ButtonLayout, ButtonGroupProps } from "./types.js";
 
 /**
  * Group related actions under one accessible name.
- * @param props Presentation values and host callbacks described by the public props type.
- * @returns The rendered ButtonGroup view.
+ *
+ * The host supplies the actions and can override their layout. ButtonGroup
+ * resolves the layout from the nearest theme scope when no override is provided.
+ * @param props Group attributes, its name, and its action children.
+ * @returns The accessible group of actions.
+ * @example
+ * <ButtonGroup label="Zoom"><Button>Zoom in</Button><Button>Zoom out</Button></ButtonGroup>
  */
-export function ButtonGroup({ label, children, buttonLayout }: ButtonGroupProps) {
+export function ButtonGroup({ label, className, buttonLayout, ...rest }: ButtonGroupProps) {
   const inherited = useContext(ButtonLayoutContext);
   const layout = buttonLayout ?? inherited ?? "grouped";
   const groupClassName = "cu-group";
   return (
     <Group
+      {...rest}
       orientation={layout === "separate" ? null : "horizontal"}
       data-layout={layout}
       role="group"
       aria-label={label}
-      className={groupClassName}
-    >
-      {children}
-    </Group>
+      className={cn(groupClassName, className)}
+    />
   );
 }

@@ -1,16 +1,21 @@
-/** document properties presentation and interaction contract. */
+/** Display metadata as a description list. */
+import { cn } from "cn";
 import type { DocumentPropertiesProps } from "./types.js";
-export type { DocumentPropertiesProps } from "./types.js";
 
 /**
- * Display metadata, tags and readable linked-page references.
- * @param props Presentation values and host callbacks described by the public props type.
- * @returns The rendered DocumentProperties view.
+ * Display metadata as a description list.
+ *
+ * The host supplies the labels and rendered values. The component aligns them in shared columns.
+ *
+ * @param props Content and attributes for the root element.
+ * @returns The rendered DocumentProperties.
+ * @example
+ * <DocumentProperties properties={[{ label: "Status", value: "Draft" }]} />
  */
-export function DocumentProperties({ properties }: DocumentPropertiesProps) {
+export function DocumentProperties({ properties, className, ...rest }: DocumentPropertiesProps) {
   const propertiesClassName = "cu-properties";
   return (
-    <dl className={propertiesClassName}>
+    <dl {...rest} className={cn(propertiesClassName, className)}>
       {properties.map((p) => (
         <div key={p.label}>
           <dt>{p.label}</dt>

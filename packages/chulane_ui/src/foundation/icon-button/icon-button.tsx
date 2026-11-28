@@ -1,35 +1,33 @@
-/** icon button presentation and interaction contract. */
-import { usePortalHost } from "../theme-scope/hooks.js";
-import { Tooltip as Primitive } from "radix-ui";
-import type { IconButtonProps } from "./types.js";
-import * as UI from "../../components/ui/tooltip.js";
+/** Named icon actions with a keyboard- and pointer-triggered tooltip. */
 import { Button } from "../button/button.js";
-
-export type { IconButtonProps } from "./types.js";
+import { Tooltip } from "../tooltip/tooltip.js";
+import type { IconButtonProps } from "./types.js";
 
 /**
- * Give a compact toolbar action a name, a tooltip and a visible focus indicator.
- * @param props Presentation values and host callbacks described by the public props type.
- * @returns The rendered IconButton view.
+ * Render a compact icon action with an accessible name and tooltip.
+ *
+ * The host supplies the icon, name, action, and state. IconButton renders the
+ * tooltip in the nearest theme scope so it uses the trigger’s theme.
+ * @param props Button attributes, icon content, name and optional tooltip behavior.
+ * @returns The button and its tooltip.
+ * @example
+ * <IconButton label="Favorite page" onClick={favorite}><Star /></IconButton>
  */
-export function IconButton({ label, children, ...props }: IconButtonProps) {
-  const host = usePortalHost();
-  const tooltipClassName = "cu-tooltip";
+export function IconButton({
+  label,
+  size = "icon",
+  variant = "ghost",
+  tooltipSide,
+  tooltipHoverable,
+  ...rest
+}: IconButtonProps) {
   return (
-    <UI.TooltipProvider>
-      <UI.Tooltip>
-        <UI.TooltipTrigger asChild>
-          <Button size="icon" variant="ghost" aria-label={label} {...props}>
-            {children}
-          </Button>
-        </UI.TooltipTrigger>
-
-        <Primitive.Portal container={host}>
-          <Primitive.Content data-slot="tooltip-content" className={tooltipClassName}>
-            {label}
-          </Primitive.Content>
-        </Primitive.Portal>
-      </UI.Tooltip>
-    </UI.TooltipProvider>
+    <Tooltip
+      trigger={<Button {...rest} size={size} variant={variant} aria-label={label} />}
+      side={tooltipSide}
+      hoverable={tooltipHoverable}
+    >
+      {label}
+    </Tooltip>
   );
 }

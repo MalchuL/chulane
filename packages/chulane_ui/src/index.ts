@@ -1,57 +1,158 @@
 /** Public component, theme and interaction contracts. */
-export * from "./agent/change-review/change-review.js";
-export * from "./agent/composer/composer.js";
-export * from "./agent/message/message.js";
-export * from "./agent/message-queue/message-queue.js";
-export * from "./agent/panel/panel.js";
-export * from "./commands/action-menu/action-menu.js";
-export * from "./commands/command-palette/command-palette.js";
-export * from "./commands/command-toolbar/command-toolbar.js";
-export * from "./commands/types.js";
-export * from "./foundation/button/button.js";
-export * from "./document/block-controls/block-controls.js";
-export * from "./document/breadcrumbs/breadcrumbs.js";
-export * from "./document/document-image/document-image.js";
-export * from "./document/document-properties/document-properties.js";
-export * from "./document/document-tabs/document-tabs.js";
-export * from "./document/page-browser/page-browser.js";
-export * from "./document/page-row/page-row.js";
-export * from "./document/selection-toolbar/selection-toolbar.js";
-export * from "./document/slash-menu/slash-menu.js";
-export * from "./document/surface/surface.js";
-export * from "./foundation/badge/badge.js";
-export * from "./foundation/button-group/button-group.js";
-export * from "./foundation/checkbox/checkbox.js";
-export * from "./foundation/chip/chip.js";
-export * from "./foundation/confirm-action/confirm-action.js";
-export * from "./foundation/dialog/dialog.js";
-export * from "./foundation/feedback/feedback.js";
-export * from "./foundation/icon-button/icon-button.js";
-export * from "./foundation/popover/popover.js";
-export * from "./foundation/search-field/search-field.js";
-export * from "./foundation/segmented-control/segmented-control.js";
-export * from "./foundation/select-field/select-field.js";
-export * from "./foundation/separator/separator.js";
-export * from "./foundation/text-area/text-area.js";
-export * from "./foundation/theme/hooks.js";
-export * from "./navigation/navigation-tree/navigation-tree.js";
-export * from "./navigation/sidebar/hooks.js";
-export * from "./navigation/sidebar/sidebar.js";
-export * from "./navigation/sidebar/types.js";
-export * from "./navigation/workspace-switcher/workspace-switcher.js";
-export * from "./workspace/overview/overview.js";
-export * from "./workspace/shell/shell.js";
-export { defaultSidebar } from "./navigation/sidebar/preferences.js";
-export * from "./agent/activity-trace/activity-trace.js";
-export * from "./agent/activity-trace/types.js";
-export * from "./agent/change-diff/change-diff.js";
-export * from "./agent/change-diff/types.js";
-export * from "./commands/context-menu/context-menu.js";
-export * from "./commands/context-menu/types.js";
-export { ThemeScope } from "./foundation/theme-scope/theme-scope.js";
-export type { ThemeScopeProps } from "./foundation/theme-scope/types.js";
+// Agent
+export {
+  ActivityTrace,
+  AgentComposer,
+  AgentMessage,
+  AgentPanel,
+  ChangeDiff,
+  ChangeReview,
+  InlineCitation,
+  MessageQueue,
+} from "./agent/index.js";
+export type {
+  ActivityEntry,
+  ActivityEvent,
+  ActivityKind,
+  ActivityStatus,
+  ActivityTraceProps,
+  AgentComposerProps,
+  AgentDraft,
+  AgentMessageProps,
+  AgentMessageSide,
+  AgentMessageStatus,
+  AgentPanelProps,
+  ChangeDiffProps,
+  ChangeReviewProps,
+  ChangeStatus,
+  ChangeTarget,
+  CitationSource,
+  ContextItem,
+  ContextItemKind,
+  InlineCitationProps,
+  MessageQueueProps,
+  ModelOption,
+  ProposedChange,
+  QueuedMessage,
+} from "./agent/index.js";
+// Commands
+export { ActionMenu, CommandPalette, CommandToolbar, ContextMenu } from "./commands/index.js";
+export type {
+  ActionMenuProps,
+  Command,
+  CommandPaletteProps,
+  CommandToolbarProps,
+  ContextMenuProps,
+  MenuEntry,
+} from "./commands/index.js";
+// Document
+export {
+  BlockControls,
+  Breadcrumbs,
+  DocumentImage,
+  DocumentProperties,
+  DocumentSurface,
+  DocumentTabs,
+  PageBrowser,
+  PageRow,
+  SelectionToolbar,
+  SlashMenu,
+} from "./document/index.js";
+export type {
+  BlockControlsProps,
+  BreadcrumbsProps,
+  DocumentImageProps,
+  DocumentPropertiesProps,
+  DocumentSurfaceProps,
+  DocumentTab,
+  DocumentTabsProps,
+  PageBrowserProps,
+  PageReference,
+  PageRowProps,
+  PageSummary,
+  SelectionToolbarProps,
+  SlashMenuOption,
+  SlashMenuProps,
+} from "./document/index.js";
+/* Navigation */
+export {
+  createDefaultSidebarPreferences,
+  FileTree,
+  NavigationTree,
+  Sidebar,
+  WorkspaceSwitcher,
+} from "./navigation/index.js";
+export type {
+  FileTreeProps,
+  NavigationItem,
+  NavigationItemKind,
+  NavigationTreeProps,
+  SidebarDestination,
+  SidebarMode,
+  SidebarPreferences,
+  SidebarProps,
+  SidebarSection,
+  WorkspaceOption,
+  WorkspaceSwitcherProps,
+} from "./navigation/index.js";
+// Workspace
+export { WorkspaceOverview, WorkspaceShell } from "./workspace/index.js";
+export type {
+  WorkspaceOverviewProps,
+  WorkspaceOverviewSection,
+  WorkspacePanels,
+  WorkspaceShellProps,
+} from "./workspace/index.js";
 
-export { ScrollArea } from "./foundation/scroll-area/scroll-area.js";
-export { FileTree } from "./navigation/file-tree/file-tree.js";
-export type { FileTreeProps, FileTreeNode } from "./navigation/file-tree/types.js";
-export * from "./agent/inline-citation/inline-citation.js";
+
+/** Foundation controls and theme. */
+export {
+  Badge,
+  Button,
+  ButtonGroup,
+  Checkbox,
+  Chip,
+  ConfirmAction,
+  Dialog,
+  Feedback,
+  IconButton,
+  Popover,
+  ScrollArea,
+  SearchField,
+  SegmentedControl,
+  SelectField,
+  Separator,
+  TextArea,
+  ThemeScope,
+  Tooltip,
+  TooltipProvider,
+  useTheme,
+} from "./foundation/index.js";
+export type {
+  BadgeProps,
+  ButtonGroupProps,
+  ButtonLayout,
+  ButtonProps,
+  CheckboxCheckedState,
+  CheckboxProps,
+  ChipProps,
+  ConfirmActionProps,
+  DialogProps,
+  FeedbackProps,
+  FeedbackStatus,
+  IconButtonProps,
+  PopoverProps,
+  ResolvedTheme,
+  ScrollAreaProps,
+  SearchFieldProps,
+  SegmentedControlProps,
+  SelectFieldProps,
+  SeparatorProps,
+  TextAreaProps,
+  ThemePreference,
+  ThemeScopeProps,
+  ThemeTokens,
+  TooltipProps,
+  TooltipProviderProps,
+  UseThemeResult,
+} from "./foundation/index.js";

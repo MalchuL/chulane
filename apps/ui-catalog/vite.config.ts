@@ -3,22 +3,43 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import ts from "typescript";
 import { fileURLToPath } from "node:url";
-const declaration = fileURLToPath(
-  new URL("../../packages/chulane_ui/dist/types/index.d.ts", import.meta.url),
-);
-function componentApi() {
-  const program = ts.createProgram([declaration], {
-    skipLibCheck: true,
-    moduleResolution: ts.ModuleResolutionKind.Bundler,
-    module: ts.ModuleKind.ESNext,
-    strict: true,
-    jsx: ts.JsxEmit.ReactJSX,
-  });
-  const checker = program.getTypeChecker();
+const declarationOptions: ts.CompilerOptions = {
+  skipLibCheck: true,
+  moduleResolution: ts.ModuleResolutionKind.Bundler,
+  module: ts.ModuleKind.ESNext,
+  strict: true,
+  jsx: ts.JsxEmit.ReactJSX,
+};
+
+/**
+ * Load the declaration graph through the library's public TypeScript entry.
+ * @returns The root declaration and its type checker.
+ * @throws If the library declarations cannot be loaded.
+ */
+function loadComponentDeclarations() {
+  const declaration = ts.resolveModuleName(
+    "@chulane/ui",
+    fileURLToPath(import.meta.url),
+    declarationOptions,
+    ts.sys,
+  ).resolvedModule?.resolvedFileName;
+  if (!declaration) {
+    throw Error("Build @chulane/ui before starting the catalog");
+  }
+  const program = ts.createProgram([declaration], declarationOptions);
   const file = program.getSourceFile(declaration);
   if (!file) {
-    throw Error("Build chulane_ui before starting the catalog");
+    throw Error("Could not load @chulane/ui declarations");
   }
+  return { checker: program.getTypeChecker(), file };
+}
+
+/**
+ * Read the public components' props for the catalog reference.
+ * @returns Prop descriptions indexed by component export.
+ */
+function componentApi() {
+  const { checker, file } = loadComponentDeclarations();
   const module = checker.getSymbolAtLocation(file)!;
   const api: Record<string, unknown> = {};
   for (const symbol of checker.getExportsOfModule(module)) {

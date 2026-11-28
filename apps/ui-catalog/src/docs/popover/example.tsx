@@ -1,5 +1,5 @@
 /** Live Popover usage, also displayed as source in the catalog. */
-import { Button, Popover } from "chulane_ui";
+import { Button, Popover } from "@chulane/ui";
 
 export default function Example() {
   return (

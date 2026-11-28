@@ -14,7 +14,7 @@ import {
   type AgentDraft,
   type QueuedMessage,
   type ProposedChange,
-} from "chulane_ui";
+} from "@chulane/ui";
 import {
   Settings2,
   ListChecks,
@@ -28,14 +28,15 @@ import {
 } from "lucide-react";
 import { reference } from "../fixtures";
 const contexts: ContextItem[] = [
-  reference,
+  { ...reference, kind: "page" },
+  { id: "opening", label: "Opening paragraph", kind: "block" },
   { id: "atlas", label: "Atlas research", kind: "project" },
 ];
 const blank: AgentDraft = {
   text: "",
   mode: "Suggest",
   model: "Device default",
-  context: [reference],
+  context: contexts.slice(0, 2),
 };
 const first: ProposedChange = {
   id: "proposal",
@@ -191,14 +192,14 @@ function Thread({
           id: "settings",
           label: "Agent settings",
           icon: Settings2,
-          run: () => setSettings(!settings),
+          onSelect: () => setSettings(!settings),
         },
         {
           id: "review",
           label: "Review changes",
           icon: ListChecks,
           checked: review,
-          run: () => setReview(!review),
+          onSelect: () => setReview(!review),
         },
       ]}
       selector={
@@ -209,7 +210,7 @@ function Thread({
           onOpenChange={setSettings}
         >
           <Checkbox
-            ref={settingsCheckbox}
+            controlProps={{ ref: settingsCheckbox }}
             label="Fail next approval"
             checked={fail}
             onCheckedChange={(value) => setFail(value === true)}
@@ -237,7 +238,7 @@ function Thread({
       composer={
         <AgentComposer
           draft={draft}
-          onChange={setDraft}
+          onDraftChange={setDraft}
           models={[
             { label: "Device default", location: "device" },
             { label: "Local", location: "local" },
@@ -275,12 +276,13 @@ function Thread({
         <AgentMessage
           messageId="trail-overview"
           author="Workspace agent"
+          hideAuthor
           actions={[
             {
               id: "copy",
               label: "Copy response",
               icon: Copy,
-              run: () =>
+              onSelect: () =>
                 void navigator.clipboard.writeText(
                   changes.map((c) => c.summary + " · " + c.target.label).join("\n"),
                 ),
@@ -290,21 +292,21 @@ function Thread({
               label: "Review again",
               icon: RefreshCw,
               disabled: running,
-              run: () => send({ ...blank, text: "Review the changes to Field notes again." }),
+              onSelect: () => send({ ...blank, text: "Review the changes to Field notes again." }),
             },
             {
               id: "up",
               label: "Helpful",
               icon: ThumbsUp,
               checked: feedback === "up",
-              run: () => setFeedback(feedback === "up" ? null : "up"),
+              onSelect: () => setFeedback(feedback === "up" ? null : "up"),
             },
             {
               id: "down",
               label: "Unhelpful",
               icon: ThumbsDown,
               checked: feedback === "down",
-              run: () => setFeedback(feedback === "down" ? null : "down"),
+              onSelect: () => setFeedback(feedback === "down" ? null : "down"),
             },
           ]}
           references={[reference]}
@@ -344,6 +346,7 @@ function Thread({
           messageId={p.id}
           side={p.author === "You" ? "user" : "assistant"}
           author={p.author}
+          hideAuthor={p.author === "Workspace agent"}
           status={p.status}
         >
           {p.text}
@@ -404,8 +407,8 @@ export function AgentReview({ onClose }: { onClose?: () => void }) {
           icon: running ? LoaderCircle : MessageCircle,
           description: running ? "Generating a response" : "Idle conversation",
         }))}
-        active={active}
-        onSelect={setActive}
+        value={active}
+        onValueChange={setActive}
         onClose={close}
         onMove={move}
       />

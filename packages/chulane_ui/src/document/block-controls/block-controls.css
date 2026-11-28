@@ -1,0 +1,40 @@
+/** Block editing controls align with the first line of text. */
+.cu-block {
+  position: relative;
+}
+.cu-block-controls,
+.cu-block-more {
+  position: absolute;
+  /* Center controls on the block's first text line instead of its top edge. */
+  inset-block-start: calc((1lh - var(--ui-row)) / 2);
+  opacity: 0;
+}
+.cu-block-controls {
+  display: flex;
+  inline-size: max-content;
+  inset-inline-end: calc(100% + var(--ui-xs));
+}
+.cu-block-more {
+  inset-inline-start: calc(100% + var(--ui-xs));
+}
+.cu-block:is(:hover, :focus-within) :is(.cu-block-controls, .cu-block-more),
+.cu-block :is(.cu-block-controls, .cu-block-more):has([data-state="open"]) {
+  opacity: 1;
+}
+@media (hover: none) {
+  .cu-block :is(.cu-block-controls, .cu-block-more) {
+    opacity: 1;
+  }
+}
+.cu-block > [role="group"] {
+  position: relative;
+}
+.cu-block textarea[data-slot="textarea"] {
+  font: inherit;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  width: 100%;
+  field-sizing: content;
+  resize: none;
+}

@@ -1,4 +1,4 @@
-/** breadcrumbs presentation and interaction contract. */
+/** Show a linked path to the current document. */
 import { Fragment } from "react";
 import {
   Breadcrumb,
@@ -9,17 +9,21 @@ import {
 } from "../../components/ui/breadcrumb.js";
 
 import type { BreadcrumbsProps } from "./types.js";
-export type { PageReference, BreadcrumbsProps } from "./types.js";
 
 /**
- * Give a readable path back to a collection or document.
- * @param props Presentation values and host callbacks described by the public props type.
- * @returns The rendered Breadcrumbs view.
+ * Show a linked path to the current document.
+ *
+ * The host supplies the ordered links. The component labels the final link as the current page.
+ *
+ * @param props Content and attributes for the root element.
+ * @returns The rendered Breadcrumbs.
+ * @example
+ * <Breadcrumbs items={path} />
  */
-export function Breadcrumbs({ items }: BreadcrumbsProps) {
+export function Breadcrumbs({ items, className, ...rest }: BreadcrumbsProps) {
   const toolbarClassName = "cu-toolbar";
   return (
-    <Breadcrumb aria-label="Breadcrumb">
+    <Breadcrumb aria-label="Breadcrumb" {...rest} className={className}>
       <BreadcrumbList className={toolbarClassName}>
         {items.map((item, i) => (
           <Fragment key={item.id}>

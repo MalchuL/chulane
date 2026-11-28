@@ -1,6 +1,6 @@
 /** Live FileTree usage, also displayed as source in the catalog. */
 import { useState } from "react";
-import { FileTree } from "chulane_ui";
+import { FileTree } from "@chulane/ui";
 
 export default function Example() {
   const [selected, setSelected] = useState("");
@@ -9,7 +9,7 @@ export default function Example() {
   return (
     <div className={previewClass}>
       <FileTree
-        expandedIds={expanded}
+        expanded={expanded}
         onExpandedChange={setExpanded}
         selected={selected}
         items={[
@@ -28,7 +28,7 @@ export default function Example() {
           },
           { id: "overview", label: "Workspace overview", kind: "page" },
         ]}
-        onSelect={setSelected}
+        onSelectedChange={setSelected}
       />
     </div>
   );

@@ -1,7 +1,26 @@
-/** Context actions for a keyboard-focusable block, page or navigation surface. */
-import type { ReactElement, ReactNode } from "react";
+/** Public contract for a context menu attached to a focusable target. */
+import type { ComponentProps, ReactElement, ReactNode } from "react";
 import type { MenuEntry } from "../types.js";
-export type ContextMenuProps = {
+
+/** Trigger attributes, menu entries and the host's target element or content. */
+export type ContextMenuProps = Omit<ComponentProps<"div">, "children" | "className"> & {
+  /** Accessible menu name and default trigger name. */
   label: string;
-  items: MenuEntry[];
-} & ({ asChild: true; children: ReactElement } | { asChild?: false; children: ReactNode });
+  /** Commands and submenus in display order. */
+  items: readonly MenuEntry[];
+  /** Additional class names for the trigger element. Defaults to none. */
+  className?: string;
+} & (
+    | {
+        /** Attaches the trigger to the supplied element. */
+        asChild: true;
+        /** Focusable element that accepts Radix props and a ref. */
+        children: ReactElement;
+      }
+    | {
+        /** Uses a focusable wrapper for the supplied content. Defaults to false. */
+        asChild?: false;
+        /** Content inside the focusable trigger. */
+        children: ReactNode;
+      }
+  );

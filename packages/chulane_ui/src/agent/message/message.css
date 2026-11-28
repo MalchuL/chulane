@@ -1,0 +1,60 @@
+/** Message spacing, author visibility and source disclosures. */
+.cu-message [data-slot="bubble-content"] {
+  overflow-wrap: anywhere;
+}
+.cu-message [data-slot="message-content"] {
+  gap: var(--ui-xs);
+}
+.cu-message[data-hide-author] > [data-slot="message-content"] > [data-slot="message-header"] {
+  &:not(:has(> [role="status"])),
+  & > strong {
+    display: none;
+  }
+}
+.cu-message [data-slot="bubble"][data-variant="ghost"] > [data-slot="bubble-content"] {
+  border: 0;
+}
+.cu-message {
+  padding: var(--ui-sm);
+  font-size: var(--ui-body);
+  line-height: var(--ui-chat-leading);
+}
+.cu-log .cu-message {
+  padding-inline: 0;
+}
+.cu-message [data-slot="bubble"][data-variant="ghost"]:has(.cu-review),
+.cu-message [data-slot="bubble-content"]:has(> .cu-review) {
+  inline-size: 100%;
+}
+.cu-agent-disclosure {
+  min-block-size: var(--ui-row-compact);
+  padding-inline: 0 var(--ui-row-padding);
+  gap: var(--ui-row-gap);
+  border-radius: var(--ui-radius);
+}
+.cu-agent-disclosure {
+  padding-inline: var(--ui-row-padding);
+  /* Match the Changes header inset, including the card and button borders. */
+  padding-inline-start: calc(var(--ui-row-padding) + 2 * var(--ui-line));
+}
+.cu-agent-disclosure:hover {
+  background: var(--ui-hover);
+}
+.cu-agent-disclosure > [data-slot="trace-icon"]:last-child {
+  order: -1;
+  inline-size: var(--ui-row-icon);
+  block-size: var(--ui-row-icon);
+}
+.cu-agent-disclosure > svg.lucide,
+.cu-agent-disclosure > [data-slot="trace-icon"]:last-child > svg.lucide {
+  inline-size: var(--ui-row-icon);
+  block-size: var(--ui-row-icon);
+  flex-shrink: 0;
+  color: var(--ui-muted);
+  stroke-width: var(--ui-stroke);
+}
+.cu-agent-disclosure:focus-visible {
+  outline: var(--ui-focus-line) solid var(--ui-focus);
+  outline-offset: calc(-1 * var(--ui-focus-line));
+  box-shadow: none;
+}

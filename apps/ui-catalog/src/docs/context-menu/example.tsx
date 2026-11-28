@@ -1,5 +1,6 @@
 /** Live ContextMenu example for the reference page. */
-import { ContextMenu } from "chulane_ui";
+import { ContextMenu } from "@chulane/ui";
+/** Attach a copy action to a keyboard-focusable paragraph wrapper. */
 export default function Example() {
   return (
     <ContextMenu
@@ -8,7 +9,7 @@ export default function Example() {
         {
           id: "copy",
           label: "Copy page title",
-          run: () => void navigator.clipboard.writeText("Field notes"),
+          onSelect: () => void navigator.clipboard.writeText("Field notes"),
         },
       ]}
     >

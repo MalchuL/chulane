@@ -9,7 +9,7 @@ export default [
       "no-restricted-imports": [
         "error",
         {
-          patterns: ["@/*", "**/packages/chulane_ui/**", "chulane_ui/src/*", "chulane_ui/dist/*"],
+          patterns: ["@/*", "**/packages/chulane_ui/**", "@chulane/ui/src/*", "@chulane/ui/dist/*"],
         },
       ],
     },

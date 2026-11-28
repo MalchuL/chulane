@@ -26,7 +26,7 @@ import {
   Badge,
   Dialog,
   SearchField,
-} from "chulane_ui";
+} from "@chulane/ui";
 const initialText =
   "The northern trail follows a quiet ridge above the valley. We kept a record of the changing light and the plants along the path.";
 export function DocumentEditor() {
@@ -88,8 +88,8 @@ export function DocumentEditor() {
     <div className={panelStackClassName}>
       <DocumentTabs
         tabs={tabs}
-        active={active}
-        onSelect={setActive}
+        value={active}
+        onValueChange={setActive}
         onClose={close}
         onMove={(id, target) => {
           const moving = tabs.find((t) => t.id === id);
@@ -133,31 +133,31 @@ export function DocumentEditor() {
                   label: "Favorite",
                   icon: Star,
                   checked: star,
-                  run: () => setStar(!star),
+                  onSelect: () => setStar(!star),
                 },
                 {
                   id: "links",
                   label: "Backlinks",
                   icon: Link,
-                  run: () => setLinks(!links),
+                  onSelect: () => setLinks(!links),
                 },
                 {
                   id: "history",
                   label: "History",
                   icon: History,
-                  run: () => setShowHistory(!showHistory),
+                  onSelect: () => setShowHistory(!showHistory),
                 },
                 {
                   id: "split",
                   label: "Split document",
                   icon: SplitSquareHorizontal,
-                  run: () => setSplit(!split),
+                  onSelect: () => setSplit(!split),
                 },
                 {
                   id: "wide",
                   label: "Full width",
                   icon: Maximize,
-                  run: () => setWide(!wide),
+                  onSelect: () => setWide(!wide),
                 },
               ]}
             />
@@ -169,26 +169,26 @@ export function DocumentEditor() {
                 </IconButton>
               }
               items={[
-                { id: "duplicate", label: "Duplicate", icon: Copy, run: duplicate },
+                { id: "duplicate", label: "Duplicate", icon: Copy, onSelect: duplicate },
                 {
                   id: "properties",
                   label: "Properties",
                   icon: ListTree,
                   checked: properties,
-                  run: () => setProperties(!properties),
+                  onSelect: () => setProperties(!properties),
                 },
                 {
                   id: "link",
                   label: "Copy link",
                   icon: Link,
-                  run: () => void navigator.clipboard.writeText(location.href),
+                  onSelect: () => void navigator.clipboard.writeText(location.href),
                 },
-                { id: "trash", label: "Close page", icon: X, run: () => close(active) },
+                { id: "trash", label: "Close page", icon: X, onSelect: () => close(active) },
               ]}
             />
           </div>
           <DocumentSurface
-            title={title}
+            heading={title}
             fullWidth={wide}
             properties={
               properties && (
@@ -209,7 +209,7 @@ export function DocumentEditor() {
                           <SearchField
                             label="Tag name"
                             value={tags}
-                            onChange={(e) => setTags(e.target.value)}
+                            onValueChange={setTags}
                           />
                         </Dialog>
                       ),

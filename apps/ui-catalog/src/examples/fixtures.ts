@@ -10,7 +10,7 @@ import {
   Network,
   Library,
 } from "lucide-react";
-import type { NavSection, PageSummary, WorkspaceOption } from "chulane_ui";
+import type { SidebarSection, PageSummary, WorkspaceOption } from "@chulane/ui";
 export const workspaceOptions: WorkspaceOption[] = [
   { label: "Personal", location: "local" },
   { label: "Research team", location: "cloud" },
@@ -19,7 +19,7 @@ export const pages: PageSummary[] = [
   {
     id: "field-notes",
     title: "Field notes",
-    preview: "Observations from the northern trail.",
+    description: "Observations from the northern trail.",
     date: "2026-11-24",
     collection: "Pages",
     tags: ["Fieldwork"],
@@ -28,7 +28,7 @@ export const pages: PageSummary[] = [
   {
     id: "atlas",
     title: "Atlas research",
-    preview: "A working map of places and ideas.",
+    description: "A working map of places and ideas.",
     date: "2026-11-23",
     collection: "Projects",
     tags: ["Research"],
@@ -37,19 +37,19 @@ export const pages: PageSummary[] = [
   {
     id: "journal",
     title: "November journal",
-    preview: "Mist gathered along the ridgeline.",
+    description: "Mist gathered along the ridgeline.",
     date: "2026-11-22",
     collection: "Journal",
   },
   {
     id: "archive",
     title: "Retired outline",
-    preview: "The first draft of the field guide.",
+    description: "The first draft of the field guide.",
     date: "2026-11-20",
     collection: "Trash",
   },
 ];
-export const sections: NavSection[] = [
+export const sections: SidebarSection[] = [
   {
     id: "favorites",
     icon: Star,

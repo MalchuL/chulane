@@ -1,0 +1,94 @@
+/** Change review card and proposal row layout. */
+.cu-review {
+  background: var(--ui-editor);
+  border: var(--ui-line) solid var(--ui-border);
+  border-radius: var(--ui-card-radius);
+}
+.cu-review-disclosure {
+  width: 100%;
+  background: transparent;
+}
+.cu-review-disclosure > small {
+  margin-inline-start: auto;
+}
+.cu-change {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--ui-row-compact);
+  align-items: center;
+  border-top: var(--ui-line) solid var(--ui-border);
+  padding-inline-end: var(--ui-row-padding);
+}
+.cu-change:hover:not(
+    :has(> p[role="alert"]:hover, > .cu-diff > [data-slot="collapsible-content"]:hover)
+  )::before {
+  /* Paint both columns in the first grid row, including the chevron's trailing padding. */
+  content: "";
+  grid-area: 1 / 1 / 2 / -1;
+  align-self: stretch;
+  margin-inline-end: calc(-1 * var(--ui-row-padding));
+  border-radius: var(--ui-radius);
+  background-color: color-mix(in oklab, var(--ui-hover) 55%, transparent);
+  pointer-events: none;
+}
+.cu-change > .cu-change-row {
+  --ui-action-hover: transparent;
+
+  grid-column: 1;
+  grid-row: 1;
+  align-items: start;
+  gap: var(--ui-sm);
+  padding-block: var(--ui-sm);
+}
+.cu-change > .cu-change-row > :is(.cu-button, .cu-group) {
+  align-self: center;
+  flex: none;
+}
+.cu-change-label {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.cu-change-label > small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.25;
+}
+.cu-change-label > strong {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.cu-change > .cu-change-row > svg {
+  margin-block-start: calc(var(--ui-xs) / 2);
+  color: var(--ui-muted);
+}
+.cu-change .cu-change-dismiss {
+  color: var(--ui-muted);
+}
+.cu-change[data-status="applied"] .cu-change-row > svg {
+  color: var(--ui-success);
+}
+.cu-change .cu-change-primary {
+  color: var(--ui-accent);
+}
+.cu-change > .cu-diff[data-compact] {
+  display: contents;
+}
+.cu-change .cu-diff[data-compact] > [data-slot="collapsible-trigger"] {
+  grid-column: 2;
+  grid-row: 1;
+  inline-size: var(--ui-row-compact);
+  block-size: var(--ui-row-compact);
+  padding: 0;
+  color: var(--ui-muted);
+}
+.cu-change :is(p[role="alert"], [data-slot="collapsible-content"]) {
+  grid-column: 1 / -1;
+  margin-inline-start: var(--ui-row-padding);
+}

@@ -4,12 +4,11 @@ A React 19 component library for a local-first knowledge workspace. The public p
 
 ## Use in a workspace app
 
-Add `chulane_ui` with the version `workspace:*` and import its stylesheet once at your application entry point.
+Add `@chulane/ui` with the version `workspace:*`. Install React and React DOM 19 in the consuming app. Import the compiled stylesheet once at your application entry point.
 
 ```tsx
-import "chulane_ui/globals.css"
-import { Button } from "chulane_ui/button"
-import { DocumentSurface } from "chulane_ui"
+import "@chulane/ui/styles.css"
+import { Button, DocumentSurface } from "@chulane/ui"
 ```
 
 Use `cu-surface` on a container to apply library typography. Override semantic `--ui-*` CSS properties on that container. Set `data-theme="light"` or `data-theme="dark"` on a theme root. The optional `useTheme` hook manages the document preference, persistence and OS changes. Wrap local overrides in `ThemeScope` to keep menu, dialog and tooltip portals inside the same theme.
@@ -32,13 +31,14 @@ From the workspace root run `pnpm --filter ui-catalog dev`. Open [Components](ht
 
 The CLI configuration is [components.json](components.json). Registry primitives live in [src/components/ui](src/components/ui). The library composes radix-nova controls, dialogs, command menus, navigation and AI Elements. The catalog owns the Resizable demonstration. A consumer can supply its own layout through `WorkspaceShell.renderPanels`.
 
-[src/globals.css](src/globals.css) is the CSS entry for Tailwind, shadcn variants, semantic color aliases and the component stylesheets. [foundation/tokens.css](src/foundation/tokens.css) defines the two palettes and geometry. Both `chulane_ui/globals.css` and the existing `chulane_ui/styles.css` resolve to the same compiled stylesheet.
+[src/globals.css](src/globals.css) compiles to `@chulane/ui/styles.css` and includes Tailwind, shadcn variants, semantic color aliases and the component stylesheets. [foundation/tokens.css](src/foundation/tokens.css) defines the two palettes and geometry.
 
 ## Development
 
-- `pnpm --filter chulane_ui exec shadcn add <component>` installs a registry primitive.
-- `pnpm --filter chulane_ui build` builds the library and declarations.
-- `pnpm --filter chulane_ui check-types`, `lint`, `format:check` and `test` check the package.
+- `pnpm --filter @chulane/ui exec shadcn add <component>` installs a registry primitive.
+- `pnpm --filter @chulane/ui build` builds the library and declarations.
+- `pnpm --filter @chulane/ui pack` builds the library and creates a tarball you can install in another app.
+- `pnpm --filter @chulane/ui check-types`, `lint`, `format:check` and `test` check the package.
 - `pnpm --filter ui-catalog test:e2e` builds both packages, starts a local preview and exercises Chromium and axe. Install the browser with `pnpm --filter ui-catalog exec playwright install chromium --only-shell`.
 
 See the [implementation plan](../../docs/chulane-ui-plan.md).

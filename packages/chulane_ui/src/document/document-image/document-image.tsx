@@ -1,20 +1,34 @@
-/** document image presentation and interaction contract. */
+/** Display a document image with optional caption and linked credit. */
+import { cn } from "cn";
 import type { DocumentImageProps } from "./types.js";
-export type { DocumentImageProps } from "./types.js";
 
 /**
- * Preserve image dimensions, caption and source attribution.
- * @param props Presentation values and host callbacks described by the public props type.
- * @returns The rendered DocumentImage view.
+ * Display a document image with optional caption and linked credit.
+ *
+ * The host supplies the image and accessible description. The figure keeps them together with any caption and attribution.
+ *
+ * @param props Content and attributes for the root element.
+ * @returns The rendered DocumentImage.
+ * @example
+ * <DocumentImage src="/field-study.svg" alt="Field study sketches" />
  */
-export function DocumentImage({ src, alt, caption, attribution }: DocumentImageProps) {
+export function DocumentImage({
+  src,
+  alt,
+  caption,
+  attribution,
+  className,
+  ...rest
+}: DocumentImageProps) {
   const figureClassName = "cu-figure";
   return (
-    <figure className={figureClassName}>
+    <figure {...rest} className={cn(figureClassName, className)}>
       <img src={src} alt={alt} />
-      <figcaption>
-        {caption} {attribution && <a href={attribution.href}>{attribution.label}</a>}
-      </figcaption>
+      {(caption || attribution) && (
+        <figcaption>
+          {caption} {attribution && <a href={attribution.href}>{attribution.label}</a>}
+        </figcaption>
+      )}
     </figure>
   );
 }

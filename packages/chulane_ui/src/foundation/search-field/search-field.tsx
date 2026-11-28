@@ -1,21 +1,35 @@
-/** search field presentation and interaction contract. */
+/** Adapts the native input to Chulane's string value API. */
+import type { ChangeEvent } from "react";
 import { Input } from "../../components/ui/input.js";
 import type { SearchFieldProps } from "./types.js";
-export type { SearchFieldProps } from "./types.js";
 
 /**
- * Filter a collection while keeping keyboard focus in its search field.
- * @param props Presentation values and host callbacks described by the public props type.
- * @returns The rendered SearchField view.
+ * Filter or find items with a native search input.
+ *
+ * The host owns the search and any results. The input owns its text when used with an optional default value.
+ *
+ * @param props Accessible label, text value and native input attributes.
+ * @returns The native input with Chulane styling.
+ * @example
+ * <SearchField label="Find pages" onValueChange={setQuery} />
  */
-export function SearchField({ label, ...props }: SearchFieldProps) {
-  return (
-    <Input
-      {...props}
+export function SearchField({
+  label,
+  placeholder = label,
+  onValueChange,
+  onChange,
+  ...rest
+}: SearchFieldProps) {
+  /**
+   * Reports the value and preserves any native change listener.
+   * @param event The React change event from the input.
+   */
+  function change(event: ChangeEvent<HTMLInputElement>) {
+    onValueChange?.(event.currentTarget.value);
+    onChange?.(event);
+  }
 
-      type="search"
-      aria-label={label}
-      placeholder={props.placeholder ?? label}
-    />
+  return (
+    <Input {...rest} aria-label={label} type="search" placeholder={placeholder} onChange={change} />
   );
 }

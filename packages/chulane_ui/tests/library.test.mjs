@@ -4,10 +4,14 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
-import * as ui from "chulane_ui";
-import { Button } from "chulane_ui/button";
-test("entry points and catalog cover public components", () => {
-  assert.equal(Button, ui.Button);
+import * as ui from "@chulane/ui";
+
+test("the package exposes the root module and compiled stylesheet", () => {
+  const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+  assert.deepEqual(Object.keys(manifest.exports).sort(), [".", "./styles.css"]);
+});
+
+test("the catalog covers public components", () => {
   const docs = readFileSync(
     new URL("../../../apps/ui-catalog/src/docs/registry.ts", import.meta.url),
     "utf8",
@@ -21,7 +25,7 @@ test("only optional sections start hidden", () => {
     { id: "recent", label: "Recent", items: [] },
     { id: "graph", label: "Graph", items: [], optional: true },
   ];
-  const p = ui.defaultSidebar(sections);
+  const p = ui.createDefaultSidebarPreferences(sections);
   assert.deepEqual(p, {
     mode: "standard",
     order: ["recent", "graph"],
@@ -32,15 +36,18 @@ test("only optional sections start hidden", () => {
 test("barrels contain reexports only", () => {
   const root = new URL("../src/", import.meta.url);
   for (const name of readdirSync(root, { recursive: true }).filter((n) => n.endsWith("index.ts"))) {
-    const source = readFileSync(new URL(name, root), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+    const source = readFileSync(new URL(name, root), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^[ \t]*\/\/.*$/gm, "");
     assert.match(
       source,
       /^(?:\s*export\s+(?:type\s+)?(?:\*|\{[^}]*\})\s+from\s+["'][^"']+["'];?\s*)+$/,
+      name,
     );
   }
 });
 
-test("public controls render registry slots and expose one stylesheet", () => {
+test("public controls render registry slots", () => {
   for (const [component, slot] of [
     [ui.Button, "button"],
     [ui.SearchField, "input"],
@@ -51,10 +58,14 @@ test("public controls render registry slots and expose one stylesheet", () => {
       new RegExp('data-slot="' + slot + '"'),
     );
   }
-  assert.equal(
-    import.meta.resolve("chulane_ui/globals.css"),
-    import.meta.resolve("chulane_ui/styles.css"),
-  );
+});
+
+test("the public stylesheet ships compiled controls and embedded fonts", () => {
+  const stylesheet = import.meta.resolve("@chulane/ui/styles.css");
+  const css = readFileSync(new URL(stylesheet), "utf8");
+  assert.match(css, /\.cu-button\b/);
+  assert.match(css, /data:font\/woff2;base64,/);
+  assert.doesNotMatch(css, /@import\b/);
 });
 
 test("composer action spacing honors the surrounding button layout", () => {
@@ -62,8 +73,8 @@ test("composer action spacing honors the surrounding button layout", () => {
     draft: { text: "", context: [], mode: "Ask", model: "Local" },
     availableContext: [],
     modes: ["Ask"],
-    models: ["Local"],
-    onChange: assert.fail,
+    models: [{ label: "Local", location: "local" }],
+    onDraftChange: assert.fail,
     onSend: assert.fail,
     onStop: assert.fail,
   });

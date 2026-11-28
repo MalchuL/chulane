@@ -1,8 +1,8 @@
-/** panel presentation and interaction contract. */
-import { InTranscript } from "../panel/context.js";
-import { ButtonGroup } from "../../foundation/button-group/button-group.js";
-
-import type { AgentPanelProps } from "./types.js";
+/** Composes the agent header, scrolling transcript and anchored host controls. */
+import { cn } from "cn";
+import { Plus, MoreHorizontal, X, Sparkles } from "lucide-react";
+import type { ReactNode } from "react";
+import { ActionMenu } from "../../commands/action-menu/action-menu.js";
 import {
   MessageScrollerProvider,
   MessageScroller,
@@ -10,16 +10,23 @@ import {
   MessageScrollerContent,
   MessageScrollerButton,
 } from "../../components/ui/message-scroller.js";
-import { Plus, MoreHorizontal, X, Sparkles } from "lucide-react";
-import { ActionMenu } from "../../commands/action-menu/action-menu.js";
+import { ButtonGroup } from "../../foundation/button-group/button-group.js";
 import { IconButton } from "../../foundation/icon-button/icon-button.js";
+import { InTranscript } from "./context.js";
+import type { AgentPanelProps } from "./types.js";
 
-export type { AgentPanelProps } from "./types.js";
+type PanelHeaderProps = Pick<AgentPanelProps, "title" | "menu" | "onNew" | "onClose">;
 
 /**
- * Keep the conversation scrollable and its composer anchored.
- * @param props Presentation values and host callbacks described by the public props type.
- * @returns The rendered AgentPanel view.
+ * Keep an agent transcript scrollable and its composer anchored.
+ *
+ * The host supplies conversation data and actions. The panel owns scroll placement and follow behavior.
+ * @param props Transcript, slots, section attributes and host actions.
+ * @returns The agent conversation section.
+ * @example
+ * <AgentPanel title="Workspace agent" composer={composer} menu={[]} onNew={create}>
+ *   {messages}
+ * </AgentPanel>
  */
 export function AgentPanel({
   title,
@@ -30,50 +37,66 @@ export function AgentPanel({
   menu,
   onNew,
   onClose,
+  className,
+  ...rest
 }: AgentPanelProps) {
-  const agentSurfaceClassName = "cu-agent cu-surface";
-  const toolbarClassName = "cu-toolbar";
-  const spacerClassName = "cu-spacer";
-  const logClassName = "cu-log";
+  const panelClassName = "cu-agent cu-surface";
   return (
-    <section className={agentSurfaceClassName}>
-      <header className={toolbarClassName}>
-        <Sparkles aria-hidden />
-        <strong>{title}</strong>
-        <span className={spacerClassName} />
-        <ButtonGroup label="Conversation actions">
-          <IconButton label="New conversation" onClick={onNew}>
-            <Plus />
-          </IconButton>
-          <ActionMenu
-            label="Agent options"
-            items={menu}
-            trigger={
-              <IconButton label="Agent options">
-                <MoreHorizontal />
-              </IconButton>
-            }
-          />
-          {onClose && (
-            <IconButton label="Close agent" onClick={onClose}>
-              <X />
-            </IconButton>
-          )}
-        </ButtonGroup>
-      </header>
+    <section {...rest} className={cn(panelClassName, className)}>
+      <PanelHeader title={title} menu={menu} onNew={onNew} onClose={onClose} />
       {selector}
-      <MessageScrollerProvider autoScroll>
-        <MessageScroller className={logClassName}>
-          <MessageScrollerViewport>
-            <MessageScrollerContent className="justify-end" aria-label="Conversation">
-              <InTranscript.Provider value>{children}</InTranscript.Provider>
-            </MessageScrollerContent>
-          </MessageScrollerViewport>
-          <MessageScrollerButton aria-label="Jump to latest message" />
-        </MessageScroller>
-      </MessageScrollerProvider>
+      <Transcript>{children}</Transcript>
       {queue}
       {composer}
     </section>
+  );
+}
+
+/** Render the panel heading and forward header actions to the host. */
+function PanelHeader({ title, menu, onNew, onClose }: PanelHeaderProps) {
+  const toolbarClassName = "cu-toolbar";
+  const spacerClassName = "cu-spacer";
+  return (
+    <header className={toolbarClassName}>
+      <Sparkles aria-hidden />
+      <strong>{title}</strong>
+      <span className={spacerClassName} />
+      <ButtonGroup label="Conversation actions">
+        <IconButton label="New conversation" onClick={onNew}>
+          <Plus />
+        </IconButton>
+        <ActionMenu
+          label="Agent options"
+          items={menu}
+          trigger={
+            <IconButton label="Agent options">
+              <MoreHorizontal />
+            </IconButton>
+          }
+        />
+        {onClose && (
+          <IconButton label="Close agent" onClick={onClose}>
+            <X />
+          </IconButton>
+        )}
+      </ButtonGroup>
+    </header>
+  );
+}
+
+/** Register message rows with the scroll provider and offer a jump to the latest message. */
+function Transcript({ children }: { children: ReactNode }) {
+  const logClassName = "cu-log";
+  return (
+    <MessageScrollerProvider autoScroll>
+      <MessageScroller className={logClassName}>
+        <MessageScrollerViewport>
+          <MessageScrollerContent aria-label="Conversation">
+            <InTranscript.Provider value>{children}</InTranscript.Provider>
+          </MessageScrollerContent>
+        </MessageScrollerViewport>
+        <MessageScrollerButton aria-label="Jump to latest message" />
+      </MessageScroller>
+    </MessageScrollerProvider>
   );
 }

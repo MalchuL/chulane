@@ -1,22 +1,38 @@
-/** message queue presentation and interaction contract. */
-import { ScrollArea } from "../../components/ui/scroll-area.js";
-import { ButtonGroup } from "../../foundation/button-group/button-group.js";
-
-import { Item } from "../../components/ui/item.js";
-
-import type { MessageQueueProps } from "./types.js";
-import { useState } from "react";
-import { Button } from "../../foundation/button/button.js";
-import { TextArea } from "../../foundation/text-area/text-area.js";
-import { IconButton } from "../../foundation/icon-button/icon-button.js";
+/** Displays queued requests and keeps unsaved queue edits local to each queue instance. */
+import { cn } from "cn";
 import { Pencil, Trash2, CornerUpRight } from "lucide-react";
+import type { Ref } from "react";
+import { Item } from "../../components/ui/item.js";
+import { ScrollArea } from "../../components/ui/scroll-area.js";
+import { Button } from "../../foundation/button/button.js";
+import { ButtonGroup } from "../../foundation/button-group/button-group.js";
+import { IconButton } from "../../foundation/icon-button/icon-button.js";
+import { TextArea } from "../../foundation/text-area/text-area.js";
+import { useQueueEdit } from "./hooks.js";
+import type { MessageQueueProps } from "./types.js";
 
-export type { QueuedMessage, MessageQueueProps } from "./types.js";
+type QueueEditorProps = {
+  text: string;
+  onTextChange: (text: string) => void;
+  onCancel: () => void;
+  onSave: () => void;
+};
+type QueueRowProps = {
+  text: string;
+  editButtonRef: Ref<HTMLButtonElement>;
+  onEdit: () => void;
+  onRemove: () => void;
+  onSteer?: () => void;
+};
 
 /**
- * Edit a queued message independently of the active draft.
- * @param props Presentation values and host callbacks described by the public props type.
- * @returns The rendered MessageQueue view.
+ * Show and edit queued messages independently of the active draft.
+ *
+ * The host owns saved requests and delivery. The queue owns the temporary edit buffer.
+ * @param props Messages, host actions and scroll area attributes.
+ * @returns The queue with inline editing controls.
+ * @example
+ * <MessageQueue items={queue} onEdit={saveQueuedText} onRemove={removeQueued} />
  */
 export function MessageQueue({
   items,
@@ -24,68 +40,98 @@ export function MessageQueue({
   onRemove,
   onSteer,
   onEditingChange,
+  className,
+  ...rest
 }: MessageQueueProps) {
+  const scrollClassName = "cu-queue-scroll";
   const stackClassName = "cu-stack";
   const cardClassName = "cu-card";
-  const toolbarClassName = "cu-toolbar";
-  const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
-  function edit(value: typeof editing) {
-    setEditing(value);
-    onEditingChange?.(value?.id ?? null);
-  }
+  const { editing, setEditing, finishEdit, restoreEditFocus, updateText } = useQueueEdit(
+    items,
+    onEditingChange,
+  );
   return (
-    <ScrollArea className="cu-queue-scroll">
+    <ScrollArea {...rest} className={cn(scrollClassName, className)}>
       <ul className={stackClassName} aria-label="Queued messages">
         {items.map((item) => (
           <Item asChild key={item.id}>
             <li className={cardClassName}>
               {editing?.id === item.id ? (
-                <>
-                  <TextArea
-                    label="Edit queued message"
-                    value={editing.text}
-                    onChange={(e) => setEditing({ ...editing, text: e.target.value })}
-                  />
-                  <ButtonGroup label="Edit actions">
-                    <Button
-                      disabled={!editing.text.trim()}
-                      onClick={() => {
-                        onEdit(item.id, editing.text);
-                        edit(null);
-                      }}
-                    >
-                      Save
-                    </Button>
-                    <Button variant="ghost" onClick={() => edit(null)}>
-                      Cancel
-                    </Button>
-                  </ButtonGroup>
-                </>
+                <QueueEditor
+                  text={editing.text}
+                  onTextChange={updateText}
+                  onCancel={finishEdit}
+                  onSave={() => {
+                    onEdit(item.id, editing.text);
+                    finishEdit();
+                  }}
+                />
               ) : (
-                <div className={toolbarClassName}>
-                  <span>{item.draft.text}</span>
-                  <ButtonGroup label="Queued message actions">
-                    <IconButton
-                      label="Edit queued message"
-                      onClick={() => edit({ id: item.id, text: item.draft.text })}
-                    >
-                      <Pencil />
-                    </IconButton>
-                    {onSteer && (
-                      <IconButton label="Steer current response" onClick={() => onSteer(item.id)}>
-                        <CornerUpRight />
-                      </IconButton>
-                    )}
-                    <IconButton label="Remove queued message" onClick={() => onRemove(item.id)}>
-                      <Trash2 />
-                    </IconButton>
-                  </ButtonGroup>
-                </div>
+                <QueueRow
+                  text={item.draft.text}
+                  editButtonRef={(button) => restoreEditFocus(item.id, button)}
+                  onEdit={() => setEditing({ id: item.id, text: item.draft.text })}
+                  onSteer={onSteer && (() => onSteer(item.id))}
+                  onRemove={() => onRemove(item.id)}
+                />
               )}
             </li>
           </Item>
         ))}
       </ul>
     </ScrollArea>
+  );
+}
+
+/**
+ * Focus the newly opened editor and keep save disabled for blank text.
+ * @param props The buffered text and callbacks for changing or closing the edit.
+ * @returns The inline textarea and its actions.
+ */
+function QueueEditor({ text, onTextChange, onCancel, onSave }: QueueEditorProps) {
+  return (
+    <>
+      <TextArea
+        autoFocus
+        label="Edit queued message"
+        value={text}
+        onChange={(event) => onTextChange(event.target.value)}
+      />
+      <ButtonGroup label="Edit actions">
+        <Button variant="ghost" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button disabled={!text.trim()} onClick={onSave}>
+          Save
+        </Button>
+      </ButtonGroup>
+    </>
+  );
+}
+
+/**
+ * Show a queued request and attach its Edit button for focus restoration.
+ * @param props The queued text, edit button ref and available actions.
+ * @returns The queue row with its action group.
+ */
+function QueueRow({ text, editButtonRef, onEdit, onRemove, onSteer }: QueueRowProps) {
+  const rowClassName = "cu-queue-row";
+  return (
+    <div className={rowClassName}>
+      <span>{text}</span>
+      <ButtonGroup label="Queued message actions">
+        <IconButton ref={editButtonRef} label="Edit queued message" onClick={onEdit}>
+          <Pencil />
+        </IconButton>
+        {onSteer && (
+          <IconButton label="Steer current response" onClick={onSteer}>
+            <CornerUpRight />
+          </IconButton>
+        )}
+        <IconButton label="Remove queued message" onClick={onRemove}>
+          <Trash2 />
+        </IconButton>
+      </ButtonGroup>
+    </div>
   );
 }

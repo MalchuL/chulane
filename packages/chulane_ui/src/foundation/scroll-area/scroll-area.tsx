@@ -1,39 +1,35 @@
 /** Scrollable Chulane surface with independently selectable scrollbar axes. */
-import * as React from "react";
 import { cn } from "cn";
-import { ScrollArea as ScrollAreaPrimitive } from "radix-ui";
+import { ScrollArea as Primitive } from "radix-ui";
+import { ScrollBar } from "../../components/ui/scroll-area.js";
+import type { ScrollAreaProps } from "./types.js";
 
-import { ScrollArea as VerticalScrollArea, ScrollBar } from "../../components/ui/scroll-area.js";
+/**
+ * Provide a bounded viewport with native scrolling and themed scrollbars.
+ *
+ * The host supplies the content and constrains the root’s dimensions. ScrollArea
+ * renders scrollbars for the requested axes and leaves scrolling to the browser.
+ * @param props Root attributes, scrollable content, and scrollbar orientation.
+ * @returns A scroll area root containing the viewport and its scrollbar controls.
+ * @example
+ * <ScrollArea className="notebook"><NotebookEntries /></ScrollArea>
+ */
 export function ScrollArea({
   className,
   children,
   orientation = "vertical",
-  ...props
-}: React.ComponentProps<typeof ScrollAreaPrimitive.Root> & {
-  orientation?: "horizontal" | "vertical" | "both";
-}) {
-  if (orientation === "vertical") {
-    return (
-      <VerticalScrollArea className={className} {...props}>
-        {children}
-      </VerticalScrollArea>
-    );
-  }
+  ...rest
+}: ScrollAreaProps) {
+  const rootClassName = "cu-scroll-area";
+  const viewportClassName = "cu-scroll-viewport";
   return (
-    <ScrollAreaPrimitive.Root
-      data-slot="scroll-area"
-      className={cn("relative", className)}
-      {...props}
-    >
-      <ScrollAreaPrimitive.Viewport
-        data-slot="scroll-area-viewport"
-        className="size-full rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1"
-      >
+    <Primitive.Root {...rest} data-slot="scroll-area" className={cn(rootClassName, className)}>
+      <Primitive.Viewport data-slot="scroll-area-viewport" className={viewportClassName}>
         {children}
-      </ScrollAreaPrimitive.Viewport>
-      {orientation === "both" && <ScrollBar />}
-      <ScrollBar orientation="horizontal" />
-      <ScrollAreaPrimitive.Corner />
-    </ScrollAreaPrimitive.Root>
+      </Primitive.Viewport>
+      {orientation !== "horizontal" && <ScrollBar />}
+      {orientation !== "vertical" && <ScrollBar orientation="horizontal" />}
+      <Primitive.Corner />
+    </Primitive.Root>
   );
 }

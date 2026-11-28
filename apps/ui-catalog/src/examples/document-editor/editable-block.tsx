@@ -30,8 +30,8 @@ import {
   IconButton,
   Dialog,
   Button,
-  type Command,
-} from "chulane_ui";
+} from "@chulane/ui";
+import type { Command, SlashMenuOption } from "@chulane/ui";
 
 export type TextBlock = { id: string; text: string };
 type Props = {
@@ -58,6 +58,8 @@ export function EditableBlock({
   const host = useRef<HTMLDivElement>(null);
   const [selected, setSelected] = useState(false);
   const [slash, setSlash] = useState(false);
+  const [slashQuery, setSlashQuery] = useState("");
+  const [blockMenuOpen, setBlockMenuOpen] = useState(false);
   const [excerpt, setExcerpt] = useState("");
   const [insertNew, setInsertNew] = useState(false);
   function replace(before: string, after = "") {
@@ -81,74 +83,90 @@ export function EditableBlock({
     ["Checklist", "- [ ] ", ListChecks],
     ["Quote", "> ", Quote],
   ] as const;
-  const insertCommands: Command[] = [];
-  for (const [label, prefix, icon] of kinds) {
-    insertCommands.push({
-      id: label,
-      icon,
-      label,
-      run: () => {
-        if (insertNew) {
-          onInsert(prefix);
-        } else {
-          replace(prefix);
-        }
-      },
-    });
+  const insertOptions: SlashMenuOption[] = kinds.map(([label, , icon]) => ({
+    id: label,
+    icon,
+    label,
+  }));
+
+  /** Dismiss the picker, clear its search and return focus to the editor. */
+  function closeSlashMenu() {
+    setSlash(false);
+    setSlashQuery("");
+    field?.focus();
   }
+
+  /**
+   * Apply the chosen block type to the current paragraph or insert it beside the paragraph.
+   * @param id Identifier of an option in the block picker.
+   */
+  function selectBlockType(id: string) {
+    const kind = kinds.find(([label]) => label === id);
+    if (!kind) {
+      return;
+    }
+    const [, prefix] = kind;
+    if (insertNew) {
+      onInsert(prefix);
+    } else {
+      replace(prefix);
+    }
+    closeSlashMenu();
+  }
+
   const transform = kinds.map(([label, prefix, icon]) => ({
     id: label,
     icon,
     label,
-    run: () => onText(prefix + block.text.replace(/^(## |- \[ \] |> )/, "")),
+    onSelect: () => onText(prefix + block.text.replace(/^(## |- \[ \] |> )/, "")),
   }));
   const ask = () => {
     setExcerpt(field?.value.slice(field.selectionStart, field.selectionEnd) || block.text);
   };
   const commands: Command[] = [
-    { id: "bold", label: "Bold", icon: Bold, run: () => replace("**", "**") },
-    { id: "italic", label: "Italic", icon: Italic, run: () => replace("*", "*") },
+    { id: "bold", label: "Bold", icon: Bold, onSelect: () => replace("**", "**") },
+    { id: "italic", label: "Italic", icon: Italic, onSelect: () => replace("*", "*") },
     {
       id: "underline",
       label: "Underline",
       icon: Underline,
-      run: () => replace("<u>", "</u>"),
+      onSelect: () => replace("<u>", "</u>"),
     },
     {
       id: "strike",
       label: "Strikethrough",
       icon: Strikethrough,
-      run: () => replace("~~", "~~"),
+      onSelect: () => replace("~~", "~~"),
     },
-    { id: "code", label: "Code", icon: Code, run: () => replace("`", "`") },
-    { id: "link", label: "Link", icon: Link, run: () => replace("[", "](url)") },
+    { id: "code", label: "Code", icon: Code, onSelect: () => replace("`", "`") },
+    { id: "link", label: "Link", icon: Link, onSelect: () => replace("[", "](url)") },
     {
       id: "highlight",
       label: "Highlight",
       icon: Highlighter,
-      run: () => replace("==", "=="),
+      onSelect: () => replace("==", "=="),
     },
-    { id: "ask", label: "Ask AI", icon: Sparkles, run: ask },
+    { id: "ask", label: "Ask AI", icon: Sparkles, onSelect: ask },
   ];
   const move = [
-    { id: "up", label: "Move up", icon: ArrowUp, disabled: first, run: () => onMove(-1) },
+    { id: "up", label: "Move up", icon: ArrowUp, disabled: first, onSelect: () => onMove(-1) },
     {
       id: "down",
       label: "Move down",
       icon: ArrowDown,
       disabled: last,
-      run: () => onMove(1),
+      onSelect: () => onMove(1),
     },
   ];
   const actions = [
-    { id: "ask", label: "Ask AI", icon: Sparkles, run: ask },
+    { id: "ask", label: "Ask AI", icon: Sparkles, onSelect: ask },
     { id: "type", label: "Turn into", icon: Repeat2, items: transform },
-    { id: "copy", label: "Duplicate block", icon: Copy, run: () => onInsert(block.text) },
+    { id: "copy", label: "Duplicate block", icon: Copy, onSelect: () => onInsert(block.text) },
     {
       id: "link",
       label: "Copy block link",
       icon: Link,
-      run: () => void navigator.clipboard.writeText(location.href.split("#")[0] + "#" + block.id),
+      onSelect: () => void navigator.clipboard.writeText(location.href.split("#")[0] + "#" + block.id),
     },
     { id: "move", label: "Move", icon: ArrowUpDown, items: move },
     {
@@ -156,7 +174,7 @@ export function EditableBlock({
       label: "Delete block",
       icon: Trash2,
       destructive: true,
-      run: onDelete,
+      onSelect: onDelete,
     },
   ];
   const draftClass = "catalog-block-host";
@@ -188,11 +206,13 @@ export function EditableBlock({
     >
       <BlockControls
         actions={actions}
+        open={blockMenuOpen}
+        onOpenChange={setBlockMenuOpen}
         onInsert={() => {
           setInsertNew(true);
           setSlash(true);
         }}
-        onDragStart={(e) => e.dataTransfer.setData("application/x-chulane-block", block.id)}
+        onHandleDragStart={(e) => e.dataTransfer.setData("application/x-chulane-block", block.id)}
       >
         <SelectionToolbar
           visible={selected}
@@ -221,7 +241,7 @@ export function EditableBlock({
                   id: "copy",
                   label: "Copy selection",
                   icon: Copy,
-                  run: () => {
+                  onSelect: () => {
                     const f = field;
                     if (f) {
                       void navigator.clipboard.writeText(
@@ -239,7 +259,7 @@ export function EditableBlock({
           label={first ? "Document body" : "Document paragraph"}
           rows={2}
           value={block.text}
-          onChange={(e) => onText(e.target.value)}
+          onValueChange={onText}
           onSelect={(e) =>
             setSelected(e.currentTarget.selectionStart !== e.currentTarget.selectionEnd)
           }
@@ -260,11 +280,11 @@ export function EditableBlock({
       </BlockControls>
       {slash && (
         <SlashMenu
-          commands={insertCommands}
-          onClose={() => {
-            setSlash(false);
-            field?.focus();
-          }}
+          options={insertOptions}
+          query={slashQuery}
+          onQueryChange={setSlashQuery}
+          onSelect={selectBlockType}
+          onClose={closeSlashMenu}
         />
       )}
       <Dialog

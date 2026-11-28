@@ -1,7 +1,5 @@
-/** A stable node ID represents a page, collection or project independently of its name. */
+/** FileTree uses the same item and expansion model as other hierarchical navigation. */
 import type { NavigationTreeProps } from "../navigation-tree/types.js";
-export type { NavItem as FileTreeNode } from "../sidebar/types.js";
-export type FileTreeProps = NavigationTreeProps & {
-  expandedIds?: readonly string[];
-  onExpandedChange?: (ids: string[]) => void;
-};
+
+/** The navigation contract used to display files and folders. */
+export type FileTreeProps = NavigationTreeProps;

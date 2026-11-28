@@ -27,6 +27,3 @@
   border: 0;
   background: transparent;
 }
-:where(.cu-surface, .cu-dialog, .cu-menu) svg {
-  vertical-align: middle;
-}

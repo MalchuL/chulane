@@ -1,0 +1,23 @@
+/** Diff additions, deletions and disclosure styling. */
+.cu-add {
+  background: var(--ui-add);
+  color: var(--ui-success);
+}
+.cu-delete {
+  background: var(--ui-delete);
+  color: var(--ui-danger);
+}
+.cu-diff pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--ui-mono);
+  border-radius: var(--ui-radius);
+  margin-block: var(--ui-xs);
+  padding: var(--ui-sm);
+}
+.cu-diff .cu-delete {
+  text-decoration: line-through;
+}
+.cu-diff[data-state="open"] > [data-slot="collapsible-trigger"] svg {
+  transform: rotate(180deg);
+}

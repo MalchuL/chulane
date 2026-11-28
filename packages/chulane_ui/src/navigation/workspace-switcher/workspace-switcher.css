@@ -1,13 +1,16 @@
-/** Keeps the workspace label aligned to the start of its trigger. */
+/** Aligns the workspace icon and label with the sidebar navigation columns. */
 .cu-workspace-selector {
   display: grid;
-  grid-template-columns: var(--ui-nav-group-icon) minmax(0, 1fr) auto;
-  gap: var(--ui-md);
-  width: 100%;
+  grid-template-columns: var(--ui-icon) minmax(0, 1fr) auto;
+  gap: var(--ui-row-gap);
+  inline-size: 100%;
+  padding-inline: var(--ui-row-padding);
+  min-inline-size: 0;
   text-align: start;
   font-weight: var(--ui-bold);
 }
 .cu-workspace-selector > span {
+  min-inline-size: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;

@@ -1,4 +1,4 @@
-/** Bundles React-independent ESM entry points and the ready-to-use stylesheet. */
+/** Builds the public ESM entry and compiled stylesheet with shared runtime dependencies. */
 import tailwind from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
@@ -10,14 +10,22 @@ export default defineConfig({
     lib: {
       entry: {
         index: "src/index.ts",
-        button: "src/foundation/button/button.tsx",
         styles: "src/globals.css",
       },
       formats: ["es"],
       cssFileName: "styles",
     },
-    rollupOptions: {
-      external: [/^react(?:\/|$)/, /^react-dom(?:\/|$)/, "radix-ui", "lucide-react", "cn"],
+    rolldownOptions: {
+      external: [
+        /^@shadcn\/react(?:\/|$)/,
+        /^react(?:\/|$)/,
+        /^react-dom(?:\/|$)/,
+        "class-variance-authority",
+        "cmdk",
+        "cn",
+        "lucide-react",
+        "radix-ui",
+      ],
     },
   },
 });

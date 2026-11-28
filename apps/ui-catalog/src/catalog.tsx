@@ -1,13 +1,61 @@
-/** Browser entry point for the English Chulane UI reference and examples. */
-import { ScrollArea } from "chulane_ui";
+/** Renders catalog navigation and demos and connects the header to the shared theme preference. */
+import { ActionMenu, Dialog, IconButton, ScrollArea, useTheme } from "@chulane/ui";
 import { useEffect, useRef, useState } from "react";
-import { BookOpen, Layers, PanelLeft, ArrowUpRight, LayoutGrid } from "lucide-react";
-import { SelectField, useTheme, IconButton, Dialog } from "chulane_ui";
+import {
+  ArrowUpRight,
+  BookOpen,
+  ChevronDown,
+  Layers,
+  LayoutGrid,
+  Monitor,
+  Moon,
+  PanelLeft,
+  Sun,
+} from "lucide-react";
 import { registry } from "./docs/registry";
 import { ComponentPage } from "./docs/component-page";
 import { examples } from "./examples/registry";
 import { Directory } from "./docs/directory";
 import { ComponentIndex } from "./docs/component-index";
+
+const themeOptions = [
+  { id: "system", label: "System", icon: Monitor },
+  { id: "light", label: "Light", icon: Sun },
+  { id: "dark", label: "Dark", icon: Moon },
+] as const;
+
+/**
+ * Show the saved preference and let the catalog update it through the shared theme hook.
+ * @returns The header button and its checked appearance menu.
+ */
+function ColorThemeMenu() {
+  const theme = useTheme();
+  const current = themeOptions.find(({ id }) => id === theme.preference) ?? themeOptions[0];
+  const label = "Color theme";
+
+  return (
+    <ActionMenu
+      label={label}
+      trigger={
+        <IconButton label={label} size="sm">
+          <current.icon data-icon="inline-start" aria-hidden />
+          {current.label}
+          <ChevronDown data-icon="inline-end" aria-hidden />
+        </IconButton>
+      }
+      items={themeOptions.map((option) => ({
+        ...option,
+        checked: option.id === theme.preference,
+        onSelect: () => theme.setPreference(option.id),
+      }))}
+    />
+  );
+}
+
+/**
+ * Render the catalog route and switch to a directory dialog when the header is narrow.
+ * @returns The catalog shell and the selected route.
+ */
 export function Catalog() {
   const surfaceCatalogClassName = "cu-surface catalog";
   const widthProbeClassName = "catalog-width-probe";
@@ -43,7 +91,6 @@ export function Catalog() {
   const example = examples.find((e) => e.slug === slug);
   const [query, setQuery] = useState("");
   const [nav, setNav] = useState(false);
-  const theme = useTheme();
   const navigation = <Directory query={query} setQuery={setQuery} activeSlug={item?.slug} />;
   let content;
   if (section === "examples") {
@@ -128,12 +175,7 @@ export function Catalog() {
           </a>
         </div>
         <span className={spacerClassName} />
-        <SelectField
-          label="Color theme"
-          options={["System", "Light", "Dark"]}
-          value={theme.preference[0].toUpperCase() + theme.preference.slice(1)}
-          onChange={(s) => theme.setPreference(s.toLowerCase() as typeof theme.preference)}
-        />
+        <ColorThemeMenu />
         <span className={mobileClassName}>
           <Dialog
             title="Browse components"

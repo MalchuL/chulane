@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "predev": "pnpm --filter chulane_ui build",
+    "predev": "pnpm --filter @chulane/ui build",
     "dev": "vite --port 5273 --strictPort",
     "build": "tsc --noEmit && vite build",
     "check-types": "tsc --noEmit",
@@ -17,7 +17,7 @@
   "dependencies": {
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "chulane_ui": "workspace:*",
+    "@chulane/ui": "workspace:*",
     "lucide-react": "^1.80.0",
     "react-resizable-panels": "^4.24.3",
     "cn": "^0.5.2"

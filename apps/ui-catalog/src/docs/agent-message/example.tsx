@@ -1,5 +1,5 @@
 /** Live AgentMessage usage, also displayed as source in the catalog. */
-import { AgentMessage } from "chulane_ui";
+import { AgentMessage } from "@chulane/ui";
 const reference = { id: "field", label: "Field notes", href: "#field-notes" };
 
 export default function Example() {

@@ -1,27 +1,35 @@
-/** chip presentation and interaction contract. */
+/** Compact remove action for a selected item or attachment. */
+import { cn } from "cn";
+import { X } from "lucide-react";
 import { Button } from "../button/button.js";
 import type { ChipProps } from "./types.js";
-import { X } from "lucide-react";
 
-export type { ChipProps } from "./types.js";
 /**
- * Let the user inspect and remove a context attachment.
- * @param props Presentation values and host callbacks described by the public props type.
- * @returns The rendered Chip view.
+ * Show a removable item with its label and optional icon.
+ *
+ * The host owns the item and removes it in response to the button activation.
+ * Chip gives that action an accessible name and shows the remove affordance.
+ * @param props The item presentation, native button attributes, and removal callback.
+ * @returns A labeled remove button.
+ * @example
+ * <Chip label="Field notes" onRemove={removeNotes} />
  */
-export function Chip({ label, onRemove, icon: Icon }: ChipProps) {
+export function Chip({ label, onRemove, icon: Icon, className, ...rest }: ChipProps) {
+  const chipClassName = "cu-chip";
+  const labelClassName = "cu-chip-label";
+  const removeIconClassName = "cu-icon-sm";
   return (
     <Button
+      {...rest}
       variant="outline"
-      size="xs"
-
-      type="button"
+      size="sm"
       aria-label={"Remove " + label}
+      className={cn(chipClassName, className)}
       onClick={onRemove}
     >
       {Icon && <Icon />}
-      {label}
-      <X aria-hidden />
+      <span className={labelClassName}>{label}</span>
+      <X aria-hidden className={removeIconClassName} />
     </Button>
   );
 }

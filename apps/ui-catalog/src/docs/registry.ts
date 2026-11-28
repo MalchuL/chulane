@@ -31,6 +31,18 @@ export const registry = [
     slug: "icon-button",
   },
   {
+    name: "Tooltip",
+    family: "Foundation",
+    description: "Describe a focused or hovered control beside its trigger.",
+    slug: "tooltip",
+  },
+  {
+    name: "TooltipProvider",
+    family: "Foundation",
+    description: "Share pointer delays among related tooltips.",
+    slug: "tooltip-provider",
+  },
+  {
     name: "ButtonGroup",
     family: "Foundation",
     description: "Group related actions under one accessible name.",

@@ -1,6 +1,6 @@
 /** Live ButtonGroup usage, also displayed as source in the catalog. */
 import { useState } from "react";
-import { Button, ButtonGroup, SelectField, type ButtonLayout } from "chulane_ui";
+import { Button, ButtonGroup, SelectField, type ButtonLayout } from "@chulane/ui";
 
 export default function Example() {
   const [layout, setLayout] = useState<ButtonLayout>("grouped");
@@ -11,7 +11,7 @@ export default function Example() {
         label="Button layout"
         value={layout}
         options={["grouped", "separate"]}
-        onChange={(value) => setLayout(value === "grouped" ? "grouped" : "separate")}
+        onValueChange={(value) => setLayout(value === "grouped" ? "grouped" : "separate")}
       />
       <ButtonGroup label="Zoom" buttonLayout={layout}>
         <Button onClick={() => setZoom(zoom - 10)}>−</Button>

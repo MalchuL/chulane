@@ -1,4 +1,8 @@
-/** Public data and callback contracts for badge. */
+/** Public attributes for the metadata label. */
+import type { ComponentProps, ReactNode } from "react";
 
-import type { ReactNode } from "react";
-export type BadgeProps = { children: ReactNode };
+/** Props for a metadata label. */
+export type BadgeProps = ComponentProps<"span"> & {
+  /** Metadata or status content. */
+  children: ReactNode;
+};

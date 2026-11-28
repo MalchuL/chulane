@@ -1,5 +1,5 @@
 /** Live DocumentImage usage, also displayed as source in the catalog. */
-import { DocumentImage } from "chulane_ui";
+import { DocumentImage } from "@chulane/ui";
 
 export default function Example() {
   return (

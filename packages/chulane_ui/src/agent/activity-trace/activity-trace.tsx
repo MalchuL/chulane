@@ -1,4 +1,6 @@
 /** Collapsed activity disclosure within an agent response. */
+import { cn } from "cn";
+import { Activity, Brain, ClipboardList, ListChecks, Terminal } from "lucide-react";
 import {
   Trace,
   TraceLine,
@@ -9,10 +11,14 @@ import {
   TraceCollapsibleTrigger,
   TraceCollapsibleContent,
 } from "../../components/ui/trace.js";
+import type { ActivityEvent, ActivityKind, ActivityTraceProps } from "./types.js";
 
-import { Activity, ListChecks, ClipboardList, Terminal, Brain } from "lucide-react";
-import type { ActivityEvent, ActivityTraceProps } from "./types.js";
-const activityIcons = { tool: Terminal, reasoning: Brain, task: ListChecks, plan: ClipboardList };
+const activityIcons = {
+  reasoning: Brain,
+  task: ListChecks,
+  plan: ClipboardList,
+  tool: Terminal,
+} satisfies Record<ActivityKind, typeof Activity>;
 
 /**
  * Display the host's activity state. Tool input and output are revealed on demand.
@@ -26,7 +32,7 @@ function ActivityRow({ event }: { event: ActivityEvent }) {
       <TraceIcon>
         <Icon />
       </TraceIcon>
-      <TraceTitle>{event.title}</TraceTitle>
+      <TraceTitle title={event.title}>{event.title}</TraceTitle>
       {event.status && <TraceDescription>{event.status}</TraceDescription>}
     </TraceLine>
   );
@@ -54,33 +60,43 @@ function ActivityRow({ event }: { event: ActivityEvent }) {
     </TraceCollapsible>
   );
 }
+
 /**
- * Inspect a chronological list of agent actions.
- * @param props Presentation values and host callbacks described by the public props type.
- * @returns The rendered ActivityTrace view.
+ * Displays a chronological list of agent activity with expandable details.
+ *
+ * The host supplies display-ready descriptions, statuses and tool data. The
+ * component controls which details are expanded and starts collapsed.
+ *
+ * @param props Activity entries and the attributes forwarded to the root div.
+ * @returns A trace disclosure when there are entries, or null for an empty list.
+ * @example
+ * <ActivityTrace activity={[{ id: "read", kind: "tool", title: "Read entry", status: "complete" }]} />
  */
-export function ActivityTrace({ activity }: ActivityTraceProps) {
+export function ActivityTrace({ activity, className, ...rest }: ActivityTraceProps) {
   const disclosureClassName = "cu-agent-disclosure";
   const traceClassName = "cu-trace";
-  return activity.length ? (
-    <TraceCollapsible className={traceClassName}>
+  if (activity.length === 0) {
+    return null;
+  }
+  return (
+    <TraceCollapsible {...rest} className={cn(traceClassName, className)}>
       <TraceCollapsibleTrigger className={disclosureClassName}>
         <Activity aria-hidden />
         Activity ({activity.length})
       </TraceCollapsibleTrigger>
       <TraceCollapsibleContent>
         <Trace>
-          {activity.map((line, i) =>
-            typeof line === "string" ? (
-              <TraceLine key={i}>
-                <TraceTitle>{line}</TraceTitle>
+          {activity.map((entry, index) =>
+            typeof entry === "string" ? (
+              <TraceLine key={`description:${index}`}>
+                <TraceTitle title={entry}>{entry}</TraceTitle>
               </TraceLine>
             ) : (
-              <ActivityRow key={line.id} event={line} />
+              <ActivityRow key={`event:${entry.id}`} event={entry} />
             ),
           )}
         </Trace>
       </TraceCollapsibleContent>
     </TraceCollapsible>
-  ) : null;
+  );
 }

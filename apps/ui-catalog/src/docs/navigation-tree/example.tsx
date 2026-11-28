@@ -1,6 +1,6 @@
 /** Live NavigationTree usage, also displayed as source in the catalog. */
 import { useState } from "react";
-import { NavigationTree } from "chulane_ui";
+import { NavigationTree } from "@chulane/ui";
 
 export default function Example() {
   const [selected, setSelected] = useState("");
@@ -14,7 +14,7 @@ export default function Example() {
           children: [{ id: "field", label: "Field notes" }],
         },
       ]}
-      onSelect={setSelected}
+      onSelectedChange={setSelected}
     />
   );
 }
