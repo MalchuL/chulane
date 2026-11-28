@@ -1,0 +1,84 @@
+/** Adaptive navigation rows, nested destinations and fixed utilities. */
+.cu-sidebar {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--ui-sidebar);
+  color: var(--ui-text);
+  gap: var(--ui-sm);
+  padding: var(--ui-sm);
+  padding-block-end: var(--ui-xs);
+  overflow: hidden;
+}
+.cu-sidebar-scroll {
+  overflow: hidden;
+  flex: 1;
+  min-height: 0;
+}
+.cu-nav-section {
+  margin-block: var(--ui-sm);
+}
+.cu-sidebar[data-mode="expanded"] .cu-nav-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--ui-sm);
+}
+.cu-sidebar[data-mode="compact"] {
+  align-items: center;
+}
+.cu-sidebar [data-slot="sidebar-footer"] {
+  margin-top: auto;
+}
+.cu-grab {
+  cursor: grab;
+}
+.cu-sidebar .cu-destination,
+.cu-sidebar .cu-nav-group-button {
+  display: grid;
+  grid-template-columns: var(--ui-nav-group-icon) minmax(0, 1fr);
+  justify-items: start;
+  text-align: start;
+  width: 100%;
+  justify-content: flex-start;
+  gap: var(--ui-md);
+  line-height: var(--ui-navigation-leading);
+}
+.cu-sidebar:not([data-mode="compact"]) .cu-nav-section {
+  padding-inline: 0;
+}
+.cu-nav-section > .cu-tree-list {
+  padding-inline-start: var(--ui-tree-indent);
+}
+.cu-nav-section .cu-tree-row > .cu-tree-button {
+  padding-inline-start: var(--ui-sm);
+}
+.cu-nav-group-button svg.lucide {
+  width: var(--ui-nav-group-icon);
+  height: var(--ui-nav-group-icon);
+}
+.cu-nav-group-button[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+.cu-sidebar .cu-nav-group-button {
+  color: var(--ui-text);
+  font-size: var(--ui-body);
+  font-weight: var(--ui-bold);
+}
+.cu-sidebar-scroll .cu-destination:last-of-type {
+  margin-bottom: var(--ui-md);
+}
+.cu-sidebar [data-slot="sidebar-footer"] {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ui-xs);
+  flex-direction: row;
+  padding-block: var(--ui-xs) 0;
+  border-top: var(--ui-line) solid var(--ui-border);
+}
+.cu-sidebar[data-mode="compact"] .cu-sidebar-scroll {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}

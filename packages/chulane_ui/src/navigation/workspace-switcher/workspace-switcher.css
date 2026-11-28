@@ -1,0 +1,17 @@
+/** Keeps the workspace label aligned to the start of its trigger. */
+.cu-workspace-selector {
+  display: grid;
+  grid-template-columns: var(--ui-nav-group-icon) minmax(0, 1fr) auto;
+  gap: var(--ui-md);
+  width: 100%;
+  text-align: start;
+  font-weight: var(--ui-bold);
+}
+.cu-workspace-selector > span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.cu-sidebar [data-slot="sidebar-header"]:has(.cu-workspace-selector) {
+  padding-inline: 0;
+}

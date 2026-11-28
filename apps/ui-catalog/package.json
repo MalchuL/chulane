@@ -1,0 +1,38 @@
+{
+  "name": "ui-catalog",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "predev": "pnpm --filter chulane_ui build",
+    "dev": "vite --port 5273 --strictPort",
+    "build": "tsc --noEmit && vite build",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint . && stylelint \"src/**/*.css\"",
+    "test:e2e": "playwright test",
+    "format:check": "prettier . --ignore-path ../../.prettierignore --check",
+    "format": "prettier . --ignore-path ../../.prettierignore --write",
+    "lint:fix": "eslint . --fix && stylelint \"src/**/*.css\" --fix"
+  },
+  "dependencies": {
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "chulane_ui": "workspace:*",
+    "lucide-react": "^1.80.0",
+    "react-resizable-panels": "^4.24.3",
+    "cn": "^0.5.2"
+  },
+  "devDependencies": {
+    "typescript": "~6.0.2",
+    "vite": "^8",
+    "@vitejs/plugin-react": "^6",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.5",
+    "@types/node": "^24",
+    "eslint": "^9.39.1",
+    "prettier": "3.9.10",
+    "@playwright/test": "^1.58",
+    "@axe-core/playwright": "^4.10",
+    "stylelint": "^17"
+  }
+}

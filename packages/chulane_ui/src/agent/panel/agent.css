@@ -1,0 +1,215 @@
+/** Agent transcript, composer and change review share semantic surface tokens. */
+.cu-agent {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ui-sm);
+  padding: var(--ui-sm);
+  padding-block-end: var(--ui-xs);
+  background: var(--ui-sidebar);
+}
+.cu-dialog .cu-agent {
+  max-height: min(var(--ui-shell-height), var(--ui-agent-overlay-max));
+}
+.cu-log {
+  overflow: hidden;
+  flex: 1;
+  min-height: 0;
+}
+/* Keep the thumb visible while MessageScroller follows new content. */
+.cu-log > [data-slot="message-scroller-viewport"] {
+  scrollbar-color: var(--ui-muted) transparent;
+}
+.cu-message {
+  padding: var(--ui-sm);
+  font-size: var(--ui-body);
+  line-height: var(--ui-chat-leading);
+}
+.cu-message [data-slot="bubble"][data-variant="ghost"]:has(.cu-review),
+.cu-message [data-slot="bubble-content"]:has(> .cu-review) {
+  inline-size: 100%;
+}
+.cu-message header {
+  margin-bottom: var(--ui-sm);
+}
+.cu-change {
+  border-top: var(--ui-line) solid var(--ui-border);
+  padding: var(--ui-xs) 0;
+}
+.cu-change pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: var(--ui-sm);
+  font-family: var(--ui-mono);
+}
+.cu-add {
+  background: var(--ui-add);
+  color: var(--ui-success);
+}
+.cu-delete {
+  background: var(--ui-delete);
+  color: var(--ui-danger);
+}
+.cu-change {
+  display: grid;
+  gap: var(--ui-xs);
+}
+.cu-change > a {
+  justify-self: start;
+}
+.cu-trace {
+  margin-top: var(--ui-sm);
+  color: var(--ui-muted);
+}
+.cu-trace ol {
+  padding-inline-start: var(--ui-lg);
+  list-style: decimal;
+}
+.cu-trace summary,
+.cu-change [data-slot="collapsible-trigger"] {
+  cursor: pointer;
+}
+.cu-agent > header {
+  border-bottom: var(--ui-line) solid var(--ui-border);
+  padding-bottom: var(--ui-sm);
+}
+.cu-composer .cu-toolbar {
+  gap: var(--ui-sm);
+  padding: var(--ui-xs) var(--ui-sm);
+}
+.cu-composer [data-align="block-start"] {
+  padding-block-end: 0;
+}
+.cu-composer [data-slot="attachment"] {
+  min-inline-size: 0;
+  flex-wrap: nowrap;
+  border-color: var(--ui-border);
+}
+.cu-composer [data-slot="attachment-media"] {
+  inline-size: var(--ui-lg);
+}
+.cu-composer textarea {
+  inline-size: calc(100% - 2 * var(--ui-xs));
+  min-block-size: calc(2 * 1lh + 2 * var(--ui-xs));
+  padding: var(--ui-xs);
+  font-size: var(--ui-body);
+}
+.cu-composer textarea:focus-visible {
+  outline-offset: calc(-1 * var(--ui-focus-line));
+}
+.cu-composer:has(> textarea:focus-visible) {
+  border-color: var(--ui-border);
+  box-shadow: none;
+}
+.cu-composer .cu-toolbar button:has(> svg + svg) {
+  inline-size: auto;
+  gap: var(--ui-xs);
+  padding-inline: var(--ui-sm);
+}
+.cu-review {
+  background: var(--ui-editor);
+  border: var(--ui-line) solid var(--ui-border);
+  border-radius: var(--ui-card-radius);
+}
+.cu-change-row {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-sm);
+  padding-inline: var(--ui-md);
+}
+.cu-review > header button {
+  padding-inline: 0;
+  gap: var(--ui-sm);
+}
+.cu-agent-disclosure > [data-slot="trace-icon"]:last-child {
+  order: -1;
+}
+.cu-agent-disclosure {
+  padding-inline: var(--ui-md);
+  gap: var(--ui-sm);
+}
+.cu-change-row h3 {
+  font-size: var(--ui-body);
+  font-weight: var(--ui-bold);
+}
+.cu-change-label {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.cu-change-row > svg {
+  flex: none;
+  color: var(--ui-muted);
+}
+.cu-change[data-status="applied"] .cu-change-row > svg {
+  color: var(--ui-success);
+}
+.cu-change button:has(.lucide-check) {
+  border-color: var(--ui-border);
+  color: var(--ui-success);
+}
+.cu-change [data-slot="collapsible"],
+.cu-change p {
+  margin-inline: var(--ui-md);
+}
+.cu-change [data-slot="collapsible-trigger"] {
+  color: var(--ui-muted);
+  font-size: var(--ui-small);
+}
+.cu-change pre {
+  font-family: inherit;
+  border-radius: var(--ui-radius);
+  margin-block: var(--ui-xs);
+}
+.cu-change .cu-delete {
+  text-decoration: line-through;
+}
+.cu-change {
+  position: relative;
+}
+.cu-change-row:has(.cu-change-label) {
+  padding-inline-end: calc(var(--ui-control) + var(--ui-md));
+  min-height: var(--ui-control);
+}
+.cu-change [data-slot="collapsible"][data-compact][data-state="closed"] {
+  margin: 0;
+}
+.cu-change [data-slot="collapsible"][data-compact] > [data-slot="collapsible-trigger"] {
+  display: grid;
+  place-items: center;
+  position: absolute;
+  inset-inline-end: var(--ui-sm);
+  inset-block-start: var(--ui-xs);
+  width: var(--ui-control);
+  height: var(--ui-control);
+  border-radius: var(--ui-radius);
+  list-style: none;
+}
+.cu-change [data-slot="collapsible"][data-compact] > [data-slot="collapsible-trigger"]:hover {
+  background: var(--ui-hover);
+}
+.cu-change [data-slot="collapsible"][data-state="open"] > [data-slot="collapsible-trigger"] svg {
+  transform: rotate(180deg);
+}
+.cu-agent-empty {
+  display: grid;
+  place-items: center;
+  gap: var(--ui-sm);
+  padding: var(--ui-xl);
+  color: var(--ui-muted);
+}
+.cu-agent > header > svg:first-child {
+  color: var(--ui-accent);
+}
+.cu-composer[data-slot="input-group"] {
+  opacity: 1;
+  transition-property: border-color, box-shadow;
+}
+
+.cu-trace pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--ui-mono);
+}

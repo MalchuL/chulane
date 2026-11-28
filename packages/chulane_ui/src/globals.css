@@ -1,0 +1,91 @@
+/** Compiled stylesheet entry for library consumers. */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+@import "shadcn/tailwind.css";
+@import "tw-animate-css";
+@import "@fontsource-variable/geist";
+@import "./foundation/tokens.css";
+@import "./foundation/base.css" layer(base);
+@import "./foundation/controls.css";
+@import "./workspace/shell/shell.css";
+@import "./navigation/sidebar/sidebar.css";
+@import "./navigation/workspace-switcher/workspace-switcher.css";
+@import "./navigation/file-tree/file-tree.css";
+@import "./document/surface/document.css";
+@import "./document/document-tabs/document-tabs.css";
+@import "./agent/panel/agent.css";
+
+/* shadcn registry components resolve their Tailwind utilities through these tokens. */
+@custom-variant dark (&:where(.dark, .dark *, [data-theme="dark"], [data-theme="dark"] *));
+:root,
+.dark,
+[data-theme],
+[style*="--ui-"] {
+  --background: var(--ui-editor);
+  --foreground: var(--ui-text);
+  --card: var(--ui-raised);
+  --card-foreground: var(--ui-text);
+  --popover: var(--ui-raised);
+  --popover-foreground: var(--ui-text);
+  --primary: var(--ui-accent);
+  --primary-foreground: var(--ui-on-accent);
+  --secondary: var(--ui-toolbar);
+  --secondary-foreground: var(--ui-text);
+  --muted: var(--ui-sidebar);
+  --muted-foreground: var(--ui-muted);
+  --accent: var(--ui-selection);
+  --accent-foreground: var(--ui-selected);
+  --destructive: var(--ui-danger);
+  --border: var(--ui-border);
+  --input: var(--ui-border);
+  --ring: var(--ui-focus);
+  --sidebar: var(--ui-sidebar);
+  --sidebar-foreground: var(--ui-text);
+  --sidebar-primary: var(--ui-accent);
+  --sidebar-primary-foreground: var(--ui-on-accent);
+  --sidebar-accent: var(--ui-selection);
+  --sidebar-accent-foreground: var(--ui-selected);
+  --sidebar-border: var(--ui-border);
+  --sidebar-ring: var(--ui-focus);
+  --radius: var(--ui-radius);
+}
+
+@theme inline {
+  --spacing: var(--ui-xs);
+  --text-xs: var(--ui-small);
+  --text-sm: var(--ui-body);
+  --text-base: var(--ui-reading);
+  --default-transition-duration: var(--ui-motion);
+  --font-sans: var(--ui-font);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --radius-sm: var(--ui-radius);
+  --radius-md: var(--ui-radius);
+  --radius-lg: var(--ui-card-radius);
+  --radius-xl: var(--ui-panel-radius);
+}

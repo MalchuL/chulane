@@ -1,0 +1,37 @@
+/** Tab chrome shared by the document title and its close control. */
+.cu-tabs {
+  display: flex;
+  gap: var(--ui-xs);
+  padding: var(--ui-xs);
+  background: var(--ui-toolbar);
+}
+
+.cu-document-tab {
+  flex: none;
+  align-items: center;
+  padding-inline-end: var(--ui-xs);
+  border: var(--ui-line) solid var(--ui-border);
+  border-radius: var(--ui-radius);
+}
+
+.cu-document-tab:hover {
+  background-color: var(--ui-hover);
+}
+
+.cu-document-tab:has(> [aria-pressed="true"]) {
+  background-color: var(--ui-selection);
+  color: var(--ui-selected);
+}
+
+.cu-document-tab > button {
+  color: inherit;
+}
+
+.cu-document-tab > [aria-pressed] {
+  padding-inline-end: var(--ui-xs);
+  background-color: transparent;
+}
+
+.cu-document-tab > [data-size="icon-xs"]:hover {
+  background-color: var(--ui-toolbar);
+}

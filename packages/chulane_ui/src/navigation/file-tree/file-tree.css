@@ -1,0 +1,59 @@
+/** Align each level's chevrons, icons and labels independently of its longest name. */
+.cu-tree-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+}
+.cu-tree-list .cu-tree-list {
+  padding-inline-start: var(--ui-tree-indent);
+}
+.cu-tree-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.cu-tree-row > .cu-tree-button {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: var(--ui-tree-chevron) var(--ui-icon) minmax(0, 1fr);
+  justify-content: start;
+  align-items: center;
+  column-gap: var(--ui-xs);
+  padding-inline: var(--ui-xs);
+  font-weight: normal;
+  text-align: start;
+}
+.cu-tree-button [data-slot="tree-icon"] {
+  grid-column: 2;
+}
+.cu-tree-button svg[data-slot="tree-chevron"] {
+  width: var(--ui-tree-chevron);
+  height: var(--ui-tree-chevron);
+}
+.cu-tree-button[aria-expanded="true"] [data-slot="tree-chevron"] {
+  transform: rotate(90deg);
+}
+.cu-tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cu-tree-row > .cu-tree-button[aria-current="true"] {
+  color: var(--ui-selected);
+  background: var(--ui-selection);
+}
+.cu-tree-actions {
+  flex: none;
+  opacity: 0;
+}
+.cu-tree-row:is(:hover, :focus-within) .cu-tree-actions,
+.cu-tree-actions[data-state="open"] {
+  opacity: 1;
+}
+@media (hover: none) {
+  .cu-tree-actions {
+    opacity: 1;
+  }
+}

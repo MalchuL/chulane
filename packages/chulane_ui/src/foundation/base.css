@@ -1,0 +1,32 @@
+/** Normalize only Chulane surfaces, leaving the host application's defaults intact. */
+:where(.cu-surface, .cu-menu, .cu-dialog, .cu-tooltip) {
+  color-scheme: var(--ui-color-scheme);
+}
+:where(.cu-surface, .cu-menu, .cu-dialog, .cu-tooltip),
+:where(.cu-surface, .cu-menu, .cu-dialog, .cu-tooltip) * {
+  box-sizing: border-box;
+}
+:where(.cu-surface, .cu-menu, .cu-dialog, .cu-tooltip)
+  :where(h1, h2, h3, h4, p, figure, ol, ul, li, dl, dd, pre, hr) {
+  margin: 0;
+  padding: 0;
+}
+:where(.cu-surface, .cu-menu, .cu-dialog) :where(h1, h2, h3, h4) {
+  font-size: inherit;
+  font-weight: var(--ui-bold);
+}
+:where(.cu-surface, .cu-menu, .cu-dialog) :where(ul, ol) {
+  list-style: none;
+}
+:where(.cu-surface, .cu-menu, .cu-dialog) :where(button, input, select, textarea) {
+  font: inherit;
+  color: inherit;
+}
+:where(.cu-surface, .cu-menu, .cu-dialog) :where(button) {
+  margin: 0;
+  border: 0;
+  background: transparent;
+}
+:where(.cu-surface, .cu-dialog, .cu-menu) svg {
+  vertical-align: middle;
+}
