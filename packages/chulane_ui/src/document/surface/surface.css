@@ -1,0 +1,42 @@
+/** Reading geometry for the document surface and its prose. */
+.cu-document {
+  max-width: var(--ui-reading-width);
+  margin-inline: auto;
+  padding: clamp(var(--ui-lg), 4%, var(--ui-page-gap));
+  /* Reserve the margin for insert and drag controls only where blocks use it. */
+  &:has(.cu-block) {
+    padding-inline: calc(2 * var(--ui-row) + var(--ui-xs)) calc(var(--ui-row) + var(--ui-xs));
+  }
+  font-size: var(--ui-reading);
+  line-height: var(--ui-reading-leading);
+  color: var(--ui-text);
+  background: var(--ui-editor);
+}
+.cu-document[data-wide="true"] {
+  max-width: none;
+}
+.cu-document h1 {
+  font-size: var(--ui-title);
+  font-weight: var(--ui-bold);
+}
+.cu-document h2 {
+  font-size: var(--ui-heading);
+}
+.cu-prose > * + * {
+  margin-top: var(--ui-md);
+}
+.cu-document h1 {
+  line-height: var(--ui-title-leading);
+}
+.cu-prose h1 {
+  font-size: var(--ui-h1);
+}
+.cu-prose h2 {
+  font-size: var(--ui-h2);
+}
+.cu-prose h3 {
+  font-size: var(--ui-h3);
+}
+.cu-document textarea {
+  width: 100%;
+}

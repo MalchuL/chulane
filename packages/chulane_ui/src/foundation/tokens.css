@@ -1,0 +1,149 @@
+/** Semantic design primitives, shared by library surfaces and the catalog. */
+:root,
+[data-theme="light"] {
+  --ui-color-scheme: light;
+  --ui-hover: color-mix(in oklab, var(--ui-text) 8%, transparent);
+  --ui-pressed: color-mix(in oklab, var(--ui-text) 14%, transparent);
+  --ui-window: #efedf5;
+  --ui-sidebar: #f5f3fa;
+  --ui-editor: #fcfbfe;
+  --ui-toolbar: #f2eff8;
+  --ui-raised: #fff;
+  --ui-border: #ded9e9;
+  --ui-control-border: #8b829a;
+  --ui-text: #211c30;
+  --ui-muted: #5f586f;
+  --ui-accent: #7040c5;
+  --ui-accent-hover: #6032b0;
+  --ui-on-accent: #fff;
+  --ui-selection: #e9dfff;
+  --ui-selection-hover: #dfd1fc;
+  --ui-selected: #5425a5;
+  --ui-focus: #8051d3;
+  --ui-success: #246b49;
+  --ui-danger: #b42336;
+  --ui-warning: #855b13;
+  --ui-add: #eaf6ee;
+  --ui-delete: #fcecef;
+}
+.dark,
+[data-theme="dark"] {
+  --ui-color-scheme: dark;
+  --ui-hover: color-mix(in oklab, var(--ui-text) 11%, transparent);
+  --ui-pressed: color-mix(in oklab, var(--ui-text) 17%, transparent);
+  --ui-window: #17161d;
+  --ui-sidebar: #201e29;
+  --ui-editor: #25232e;
+  --ui-toolbar: #201e29;
+  --ui-raised: #2d2a38;
+  --ui-border: #3d394b;
+  --ui-control-border: #787189;
+  --ui-text: #f0edf7;
+  --ui-muted: #b5aec6;
+  --ui-accent: #b69af8;
+  --ui-accent-hover: #c6b0ff;
+  --ui-on-accent: #211638;
+  --ui-selection: #40305d;
+  --ui-selection-hover: #4d3a70;
+  --ui-selected: #e0d1ff;
+  --ui-focus: #b69af8;
+  --ui-success: #8ad6ad;
+  --ui-danger: #ff9aa7;
+  --ui-warning: #eac47c;
+  --ui-add: #233b30;
+  --ui-delete: #432a34;
+}
+:root {
+  --ui-font: "Geist Variable", system-ui, sans-serif;
+  --ui-mono: ui-monospace, monospace;
+  --ui-small: 0.75rem;
+  --ui-body: 0.875rem;
+  --ui-reading: 1rem;
+  --ui-heading: 1.45rem;
+  --ui-title: 2.25rem;
+  --ui-leading: 1.5;
+  --ui-reading-leading: 1.625;
+  --ui-weight: 550;
+  --ui-bold: 650;
+  --ui-xs: 0.25rem;
+  --ui-sm: 0.5rem;
+  --ui-md: 0.75rem;
+  --ui-lg: 1rem;
+  --ui-xl: 1.5rem;
+  --ui-xxl: 2rem;
+  --ui-page-gap: 3rem;
+  --ui-control: 2.125rem;
+  --ui-button-xs: 1.5rem;
+  --ui-button: 2rem;
+  --ui-button-lg: 2.25rem;
+  --ui-icon: 1.05rem;
+  --ui-icon-sm: 0.75rem;
+  --ui-badge: 1.25rem;
+  --ui-stroke: 1.7;
+  --ui-line: 1px;
+  --ui-focus-line: 2px;
+  --ui-composer-focus-halo: 3px;
+  --ui-radius: 0.375rem;
+  --ui-card-radius: 0.5rem;
+  --ui-panel-radius: 0.75rem;
+  --ui-composer-radius: 1rem;
+  --ui-composer-padding-inline: 0.625rem;
+  --ui-round: 999rem;
+  --ui-nav: 240px;
+  --ui-nav-min: 200px;
+  --ui-nav-max: 320px;
+  --ui-rail: 52px;
+  --ui-expanded: 350px;
+  --ui-expanded-min: 320px;
+  --ui-expanded-max: 380px;
+  --ui-agent: 380px;
+  --ui-panel-gutter: 12px;
+  --ui-agent-min: 320px;
+  --ui-agent-max: 480px;
+  --ui-compact-breakpoint: 1100px;
+  --ui-reading-width: 48rem;
+  --ui-menu-width: 13rem;
+  --ui-dialog-width: 32rem;
+  --ui-shell-height: 38rem;
+  --ui-grip: 0.375rem;
+  --ui-shadow: 0 0.5rem 2rem #17161d24;
+  --ui-overlay: #17161d66;
+  --ui-layer: 30;
+  --ui-motion: 140ms;
+  --ui-catalog-width: 86rem;
+}
+:root {
+  --ui-control-xs: 1.75rem;
+  --ui-control-sm: 1.875rem;
+  --ui-control-lg: 2.5rem;
+  --ui-tracking-display: -0.04em;
+  --ui-display-leading: 1.15;
+  --ui-queue-max: 25dvh;
+  --ui-overlay-max: 90dvh;
+  --ui-agent-overlay-max: 70dvh;
+  --ui-grid-ratio: 2;
+  --ui-catalog-heading-space: 4vw;
+}
+:root {
+  --ui-h1: 1.75rem;
+  --ui-h2: 1.4375rem;
+  --ui-h3: 1.125rem;
+  --ui-chat-leading: 1.5714;
+  --ui-metadata-leading: 1.5;
+  --ui-title-leading: 1.222;
+  --ui-avatar: 1.5rem;
+  --ui-tree-chevron: 0.875rem;
+  --ui-tree-indent: 1rem;
+}
+:root {
+  --ui-catalog-breakpoint: 48rem;
+}
+:root {
+  --ui-row: 2rem;
+  --ui-row-compact: 1.75rem;
+  --ui-row-padding: var(--ui-sm);
+  --ui-row-gap: var(--ui-sm);
+  --ui-row-icon: 1rem;
+  --ui-menu-icon: var(--ui-row-icon);
+  --ui-menu-label: var(--ui-body);
+}

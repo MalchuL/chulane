@@ -1,0 +1,70 @@
+/** Align row icons and labels at each depth, with disclosure in the folder icon slot. */
+.cu-tree-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+}
+.cu-tree-list .cu-tree-list {
+  padding-inline-start: var(--ui-tree-indent);
+}
+.cu-tree-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.cu-tree-row > .cu-tree-button {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: var(--ui-icon) minmax(0, 1fr);
+  justify-content: start;
+  align-items: center;
+  gap: var(--ui-row-gap);
+  padding-inline: var(--ui-row-padding);
+  font-size: var(--ui-body);
+  min-block-size: var(--ui-row-compact);
+  text-align: start;
+}
+.cu-tree-button > :is([data-slot="tree-icon"], [data-slot="tree-chevron"]) {
+  grid-column: 1;
+  grid-row: 1;
+}
+.cu-tree-row > .cu-tree-button svg[data-slot="tree-chevron"] {
+  justify-self: center;
+}
+.cu-tree-button[aria-expanded] > [data-slot="tree-icon"] {
+  visibility: hidden;
+}
+@media (hover: hover) {
+  .cu-tree-button[aria-expanded]:not(:hover, :focus-visible) > [data-slot="tree-icon"] {
+    visibility: visible;
+  }
+  .cu-tree-button[aria-expanded]:not(:hover, :focus-visible) > [data-slot="tree-chevron"] {
+    visibility: hidden;
+  }
+}
+.cu-tree-button[aria-expanded="true"] [data-slot="tree-chevron"] {
+  transform: rotate(90deg);
+}
+.cu-tree-name {
+  grid-column: 2;
+  grid-row: 1;
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cu-tree-actions {
+  flex: none;
+  opacity: 0;
+}
+.cu-tree-row:is(:hover, :focus-within) .cu-tree-actions,
+.cu-tree-actions[data-state="open"] {
+  opacity: 1;
+}
+@media (hover: none) {
+  .cu-tree-actions {
+    opacity: 1;
+  }
+}

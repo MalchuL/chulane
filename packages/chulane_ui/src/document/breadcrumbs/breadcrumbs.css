@@ -1,0 +1,5 @@
+/** The current breadcrumb uses the foreground text color. */
+[data-slot="breadcrumb-link"][aria-current="page"] {
+  color: var(--ui-text);
+  font-weight: var(--ui-weight);
+}

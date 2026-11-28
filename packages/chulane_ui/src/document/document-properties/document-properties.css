@@ -1,0 +1,25 @@
+/** Metadata rows share column widths across all properties. */
+.cu-properties {
+  display: grid;
+  grid-template-columns: fit-content(40%) minmax(0, 1fr);
+  gap: var(--ui-xs) var(--ui-md);
+  margin-block: var(--ui-lg);
+  font-size: var(--ui-body);
+  overflow-wrap: anywhere;
+}
+.cu-properties > div {
+  display: grid;
+  grid-template-columns: subgrid;
+  grid-column: 1 / -1;
+}
+.cu-properties dt {
+  color: var(--ui-muted);
+}
+.cu-properties > div {
+  align-items: baseline;
+}
+.cu-properties dd > .cu-button:has(> [data-slot="badge"]) {
+  padding-inline: 0;
+  border-inline-width: 0;
+  block-size: auto;
+}

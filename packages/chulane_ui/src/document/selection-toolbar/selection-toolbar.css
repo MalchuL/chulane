@@ -1,0 +1,24 @@
+/** Floating selection toolbar positioning and appearance. */
+.cu-selection-toolbar {
+  display: inline-flex;
+  background: var(--ui-raised);
+  border: var(--ui-line) solid var(--ui-border);
+  border-radius: var(--ui-card-radius);
+  box-shadow: var(--ui-shadow);
+  padding: var(--ui-xs);
+}
+.cu-selection-toolbar {
+  position: absolute;
+  z-index: var(--ui-layer);
+  max-width: 100%;
+}
+.cu-selection-toolbar .cu-toolbar {
+  gap: 0;
+}
+.cu-selection-toolbar {
+  align-items: center;
+  width: max-content;
+}
+.cu-selection-toolbar > .cu-toolbar {
+  border-inline: var(--ui-line) solid var(--ui-border);
+}

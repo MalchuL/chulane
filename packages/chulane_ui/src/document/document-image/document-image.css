@@ -1,0 +1,10 @@
+/** Images scale to the available reading width. */
+.cu-figure img {
+  max-width: 100%;
+  height: auto;
+}
+.cu-figure figcaption {
+  font-size: var(--ui-small);
+  color: var(--ui-muted);
+  overflow-wrap: anywhere;
+}

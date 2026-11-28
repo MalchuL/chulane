@@ -1,0 +1,18 @@
+/** Queued message text and action alignment. */
+.cu-queue-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: start;
+  gap: var(--ui-sm);
+  width: 100%;
+}
+.cu-queue-row > span {
+  flex: 1 1 0;
+  min-width: min(100%, var(--ui-xl));
+  padding-block: var(--ui-xs);
+  overflow-wrap: anywhere;
+}
+.cu-queue-row > .cu-group,
+.cu-queue-scroll .cu-card > .cu-group {
+  margin-inline-start: auto;
+}

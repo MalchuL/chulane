@@ -1,0 +1,125 @@
+/** Adaptive navigation rows, nested destinations and fixed utilities. */
+.cu-sidebar {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--ui-sidebar);
+  color: var(--ui-text);
+  gap: var(--ui-sm);
+  padding: var(--ui-sm);
+  padding-block-end: var(--ui-xs);
+  overflow: hidden;
+}
+.cu-sidebar-scroll {
+  overflow: hidden;
+  flex: 1;
+  min-height: 0;
+}
+/* Keep the overlay scrollbar clear of row action buttons. */
+.cu-sidebar:not([data-mode="compact"]) .cu-sidebar-scroll > [data-slot="scroll-area-viewport"] {
+  padding-inline-end: var(--ui-md);
+}
+.cu-sidebar .cu-nav-section {
+  padding: 0;
+}
+.cu-nav-section + .cu-nav-section {
+  margin-block-start: var(--ui-md);
+}
+.cu-sidebar[data-mode="expanded"] .cu-nav-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--ui-sm);
+}
+.cu-sidebar[data-mode="compact"] {
+  align-items: center;
+}
+.cu-sidebar [data-slot="sidebar-footer"] {
+  margin-top: auto;
+}
+.cu-sidebar .cu-destination,
+.cu-sidebar .cu-nav-group-button {
+  inline-size: 100%;
+  min-inline-size: 0;
+  gap: var(--ui-row-gap);
+  text-align: start;
+}
+.cu-sidebar .cu-destination {
+  display: grid;
+  grid-template-columns: var(--ui-icon) minmax(0, 1fr);
+  padding-inline: var(--ui-row-padding);
+  font-size: var(--ui-body);
+}
+.cu-nav-label {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+:is(.cu-sidebar, .cu-sidebar-section-popover)
+  :is(.cu-destination, .cu-nav-group-button, .cu-tree-button) {
+  font-weight: 450;
+}
+:is(.cu-sidebar, .cu-sidebar-section-popover)
+  :is(.cu-destination, .cu-nav-group-button, .cu-tree-button):not(
+    [aria-pressed="true"],
+    [aria-current="true"]
+  ) {
+  --ui-action-hover: color-mix(in srgb, var(--ui-hover), var(--ui-text) 1%);
+}
+:is(.cu-sidebar, .cu-sidebar-section-popover)
+  :is(.cu-destination[aria-pressed="true"], .cu-tree-button[aria-current="true"]) {
+  font-weight: var(--ui-weight);
+}
+.cu-sidebar .cu-nav-group-button {
+  display: flex;
+  flex-direction: row-reverse;
+  justify-content: space-between;
+  min-block-size: var(--ui-row-compact);
+  block-size: auto;
+  padding-inline: var(--ui-row-padding);
+}
+.cu-nav-group-button svg.lucide {
+  opacity: 0;
+}
+.cu-nav-group-button:is(:hover, :focus-visible, [aria-expanded="false"]) svg.lucide {
+  opacity: 1;
+}
+.cu-sidebar[data-mode="compact"] .cu-destination {
+  grid-template-columns: var(--ui-icon);
+  justify-content: center;
+  inline-size: var(--ui-row);
+  padding-inline: 0;
+}
+.cu-nav-group-button[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+.cu-sidebar .cu-nav-group-button {
+  color: var(--ui-muted);
+  font-size: var(--ui-small);
+}
+.cu-sidebar-scroll .cu-destination:has(+ .cu-nav-columns) {
+  margin-bottom: var(--ui-md);
+}
+.cu-sidebar [data-slot="sidebar-footer"] {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ui-xs);
+  flex-direction: row;
+  padding-block: var(--ui-xs) 0;
+  border-top: var(--ui-line) solid var(--ui-border);
+}
+/* Match the sidebar footer inset when the agent is docked in the workspace. */
+.cu-shell-agent .cu-agent {
+  padding-block-end: var(--ui-xs);
+}
+.cu-sidebar[data-mode="compact"] .cu-sidebar-scroll {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.cu-sidebar-footer-content {
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}

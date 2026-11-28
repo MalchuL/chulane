@@ -1,0 +1,104 @@
+/** Shell layout responds to its measured container and user preferences. */
+.cu-shell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: var(--ui-shell-height);
+  background: var(--ui-window);
+  border: var(--ui-line) solid var(--ui-border);
+  border-radius: var(--ui-panel-radius);
+  overflow: hidden;
+}
+.cu-shell-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--ui-xs);
+  padding: var(--ui-xs);
+  background: var(--ui-toolbar);
+}
+.cu-shell-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.cu-shell-nav {
+  width: clamp(var(--ui-nav-min), var(--ui-user-nav, var(--ui-nav)), var(--ui-nav-max));
+  flex: none;
+}
+.cu-shell-nav[data-mode="expanded"] {
+  width: clamp(
+    var(--ui-expanded-min),
+    var(--ui-user-nav, var(--ui-expanded)),
+    var(--ui-expanded-max)
+  );
+}
+.cu-shell-nav[data-mode="compact"] {
+  width: var(--ui-rail);
+}
+.cu-shell-main {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--ui-editor);
+}
+.cu-shell-agent {
+  width: clamp(var(--ui-agent-min), var(--ui-user-agent, var(--ui-agent)), var(--ui-agent-max));
+  flex: none;
+  min-height: 0;
+}
+.cu-split {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  height: 100%;
+  gap: var(--ui-line);
+  background: var(--ui-border);
+}
+.cu-split > * {
+  overflow: hidden;
+  background: var(--ui-editor);
+}
+.cu-breakpoint-probe {
+  position: absolute;
+  width: var(--ui-compact-breakpoint);
+  height: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.cu-shell-nav {
+  min-width: var(--ui-nav-min);
+  max-width: var(--ui-nav-max);
+}
+.cu-shell-nav[data-mode="expanded"] {
+  min-width: var(--ui-expanded-min);
+  max-width: var(--ui-expanded-max);
+}
+.cu-shell-nav[data-mode="compact"] {
+  min-width: var(--ui-rail);
+  max-width: var(--ui-rail);
+}
+.cu-shell-agent {
+  min-width: var(--ui-agent-min);
+  max-width: var(--ui-agent-max);
+}
+.cu-shell-main > [data-slot="scroll-area"] {
+  height: 100%;
+}
+
+.cu-shell-main [data-slot="scroll-area-viewport"] > div:has(> .cu-panel),
+.cu-split [data-slot="scroll-area-viewport"] > div:has(> .cu-panel) {
+  min-block-size: 100%;
+  /* Radix sets display: table inline on its content wrapper. */
+  display: flex !important;
+  flex-direction: column;
+}
+.cu-shell-main [data-slot="scroll-area-viewport"] > div > .cu-panel {
+  flex: 1;
+  border: 0;
+  border-radius: 0;
+}
+.cu-shell-header > .cu-group {
+  gap: var(--ui-xs);
+}

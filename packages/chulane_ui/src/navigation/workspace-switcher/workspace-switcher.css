@@ -1,0 +1,20 @@
+/** Aligns the workspace icon and label with the sidebar navigation columns. */
+.cu-workspace-selector {
+  display: grid;
+  grid-template-columns: var(--ui-icon) minmax(0, 1fr) auto;
+  gap: var(--ui-row-gap);
+  inline-size: 100%;
+  padding-inline: var(--ui-row-padding);
+  min-inline-size: 0;
+  text-align: start;
+  font-weight: var(--ui-bold);
+}
+.cu-workspace-selector > span {
+  min-inline-size: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.cu-sidebar [data-slot="sidebar-header"]:has(.cu-workspace-selector) {
+  padding-inline: 0;
+}

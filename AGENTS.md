@@ -33,3 +33,16 @@ Define HTML class names as named constants in the narrowest owning scope when as
 For UI, favor a minimal, icon-first design. Give icon-only controls accessible names and tooltips, keyboard support, and visible focus; retain text where it clarifies important actions.
 
 Keep commits focused and imperative. Pull requests describe the problem, solution, validation, and API or UI impact.
+
+## Component library and catalog conventions
+
+Apply these conventions in `packages/chulane_ui` and `apps/ui-catalog`, including their tests and configuration.
+
+- Place static imports together after the module JSDoc and directives, before declarations and re-exports. Use top-level `import type` for type dependencies, including component types used with `typeof`. Preserve the order of side-effect imports.
+- Group files by component. Keep its hooks in `hooks.ts`, its contracts in `types.ts`, and only re-exports in `index.ts`. Use relative imports inside the library and public package entry points in the catalog.
+- Follow the Rivto style for new and edited control flow. Use braces for every branch and loop, put nonempty block bodies on separate lines, and use explicit branches for multi-way decisions. Aim for functions of at most 50 lines. Place private methods after other class members.
+- Document each function, hook, component and method at its declaration. Describe concrete behavior, relevant ownership and cleanup, parameters, return values and meaningful failures. Preserve existing explanations when moving code.
+- The host owns application data, commands and service lifetimes. A component borrows the narrow contract its callers need. When changing an API, inspect creation, use and cleanup together.
+- Install shadcn primitives via the package CLI configuration. Keep theme tokens shared and feature styles alongside their owners. Preserve cascade order in `globals.css`; validate that a consumer can use the public exports and compiled stylesheet.
+
+Treat shadcn/ui registry files, their generated hooks, and the catalog's registry Resizable as vendor sources. Restore or update them through the configured shadcn CLI. Keep Chulane styling and behavior in the owning components and demos.

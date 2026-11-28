@@ -1,0 +1,77 @@
+/** Page rows lay out the thumbnail, summary, date and actions. */
+.cu-page-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ui-xs) var(--ui-row-gap);
+  min-width: 0;
+  padding: var(--ui-sm) var(--ui-md);
+  border: 0;
+  box-shadow: inset 0 calc(-1 * var(--ui-line)) var(--ui-border);
+}
+.cu-page-row-metadata {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ui-row-gap);
+  max-inline-size: 100%;
+  margin-inline-start: auto;
+  overflow-wrap: anywhere;
+}
+.cu-page-row-metadata > button {
+  flex: none;
+}
+.cu-page-row > .cu-page-open {
+  flex: 1 1 calc(5 * var(--ui-row));
+  min-width: 0;
+  height: auto;
+  padding: 0;
+  border: 0;
+  gap: var(--ui-row-gap);
+  justify-content: start;
+  text-align: start;
+  cursor: pointer;
+}
+.cu-page-row > .cu-page-open:is(:hover, :active, [aria-pressed]) {
+  background-color: transparent;
+}
+.cu-page-row > .cu-page-open:focus-visible {
+  outline-offset: calc(-1 * var(--ui-line));
+}
+.cu-page-preview {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: none;
+  inline-size: calc(var(--ui-xxl) + var(--ui-sm));
+  aspect-ratio: 1;
+  overflow: hidden;
+  border: var(--ui-line) solid var(--ui-border);
+  border-radius: var(--ui-radius);
+  background-color: var(--ui-hover);
+  color: var(--ui-muted);
+  font-size: var(--ui-icon);
+}
+.cu-page-preview > img {
+  position: absolute;
+  inset: 0;
+  inline-size: 100%;
+  block-size: 100%;
+  object-fit: cover;
+}
+.cu-page-summary {
+  display: grid;
+  min-inline-size: 0;
+  line-height: 1.3;
+}
+.cu-page-summary > strong {
+  font-size: var(--ui-body);
+  font-weight: var(--ui-weight);
+}
+.cu-page-summary > .cu-muted {
+  font-size: var(--ui-small);
+}
+.cu-page-summary > * {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}

@@ -1,0 +1,34 @@
+/** Tabs meet the content surface and reserve space for the close control. */
+.cu-tabs {
+  display: flex;
+  gap: var(--ui-xs);
+  padding: var(--ui-xs) var(--ui-xs) 0;
+  background: var(--ui-toolbar);
+}
+
+.cu-document-tab {
+  flex: none;
+  align-items: center;
+  padding-inline-end: var(--ui-xs);
+  border-radius: var(--ui-radius) var(--ui-radius) 0 0;
+}
+
+.cu-document-tab:hover {
+  background-color: var(--ui-hover);
+}
+
+.cu-document-tab:has(> [aria-pressed="true"]) {
+  background-color: var(--ui-tab-surface, var(--ui-editor));
+}
+
+.cu-document-tab > .cu-button[aria-pressed] {
+  padding-inline-end: var(--ui-xs);
+  background-color: transparent;
+}
+
+@media (hover: hover) {
+  .cu-document-tab:not(:is(:hover, :focus-within, :has(> [aria-pressed="true"])))
+    > [data-size="icon-xs"] {
+    opacity: 0;
+  }
+}

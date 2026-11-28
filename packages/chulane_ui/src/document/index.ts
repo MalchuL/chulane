@@ -1,0 +1,21 @@
+/** Public exports for document content, controls and page navigation. */
+export { BlockControls } from "./block-controls/index.js";
+export type { BlockControlsProps } from "./block-controls/index.js";
+export { Breadcrumbs } from "./breadcrumbs/index.js";
+export type { BreadcrumbsProps, PageReference } from "./breadcrumbs/index.js";
+export { DocumentImage } from "./document-image/index.js";
+export type { DocumentImageProps } from "./document-image/index.js";
+export { DocumentProperties } from "./document-properties/index.js";
+export type { DocumentPropertiesProps } from "./document-properties/index.js";
+export { DocumentSurface } from "./surface/index.js";
+export type { DocumentSurfaceProps } from "./surface/index.js";
+export { DocumentTabs } from "./document-tabs/index.js";
+export type { DocumentTab, DocumentTabsProps } from "./document-tabs/index.js";
+export { PageBrowser } from "./page-browser/index.js";
+export type { PageBrowserProps } from "./page-browser/index.js";
+export { PageRow } from "./page-row/index.js";
+export type { PageRowProps, PageSummary } from "./page-row/index.js";
+export { SelectionToolbar } from "./selection-toolbar/index.js";
+export type { SelectionToolbarProps } from "./selection-toolbar/index.js";
+export { SlashMenu } from "./slash-menu/index.js";
+export type { SlashMenuOption, SlashMenuProps } from "./slash-menu/index.js";

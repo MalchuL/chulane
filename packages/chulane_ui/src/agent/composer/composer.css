@@ -1,0 +1,120 @@
+/** Composer input surface, context chips and delivery controls. */
+.cu-composer-form {
+  min-inline-size: 0;
+}
+.cu-composer[data-slot="input-group"] {
+  gap: var(--ui-xs);
+  padding: var(--ui-sm);
+  background: var(--ui-raised);
+  border: var(--ui-line) solid var(--ui-control-border);
+  border-radius: var(--ui-composer-radius);
+  opacity: 1;
+  transition-property: border-color, box-shadow;
+}
+.cu-composer[data-slot="input-group"]:focus-within {
+  border-color: var(--ui-focus);
+  box-shadow: 0 0 0 var(--ui-composer-focus-halo)
+    color-mix(in srgb, var(--ui-focus) 20%, transparent);
+  /* Forced colors suppress the halo and recolor the transparent outline. */
+  outline: var(--ui-line) solid transparent;
+  outline-offset: var(--ui-line);
+}
+.cu-composer .cu-toolbar {
+  gap: var(--ui-xs);
+  padding: 0;
+}
+.cu-composer [data-slot="attachment"] {
+  /* Share a row while each chip has room for at least one word. */
+  flex: 1 1 min-content;
+  max-inline-size: max-content;
+  min-inline-size: 0;
+  align-items: center;
+  padding-inline: var(--ui-xs);
+  block-size: var(--ui-row-compact);
+  padding-block: 0;
+  flex-wrap: nowrap;
+  gap: var(--ui-xs);
+  border-color: var(--ui-border);
+}
+.cu-composer [data-slot="attachment-title"] {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+  white-space: normal;
+}
+.cu-composer .cu-composer-remove-context[data-size="icon-xs"] {
+  --ui-composer-remove-size: calc(var(--ui-lg) + var(--ui-xs));
+
+  inline-size: var(--ui-composer-remove-size);
+  block-size: var(--ui-composer-remove-size);
+  min-inline-size: var(--ui-composer-remove-size);
+  min-block-size: var(--ui-composer-remove-size);
+  padding: 0;
+}
+.cu-composer [data-align="block-end"] > .cu-group {
+  flex-wrap: nowrap;
+  gap: var(--ui-xs);
+}
+.cu-composer [data-align="block-end"] > .cu-group:first-child {
+  /* Let delivery move to the next line before the option labels disappear. */
+  flex: 1 1 max-content;
+  min-inline-size: 0;
+}
+.cu-composer [data-align="block-end"] .cu-button {
+  min-block-size: var(--ui-row);
+  block-size: var(--ui-row);
+}
+.cu-composer [data-align="block-end"] .cu-button:not(.cu-composer-option) {
+  flex-shrink: 0;
+  inline-size: var(--ui-row);
+}
+.cu-composer [data-slot="attachment-media"] {
+  inline-size: var(--ui-icon);
+}
+.cu-composer [data-slot="attachment-media"] svg {
+  width: var(--ui-icon);
+  height: var(--ui-icon);
+}
+.cu-composer .cu-composer-remove-context svg {
+  width: var(--ui-icon-sm);
+  height: var(--ui-icon-sm);
+}
+.cu-composer textarea {
+  inline-size: 100%;
+  min-block-size: 2lh;
+  padding: 0;
+  border: 0;
+  font-size: var(--ui-body);
+}
+.cu-composer textarea:focus-visible {
+  outline: none;
+}
+.cu-composer .cu-composer-option {
+  flex: 0 1 auto;
+  inline-size: auto;
+  min-inline-size: calc(
+    var(--ui-icon) + var(--ui-icon-sm) + 3 * var(--ui-xs) + var(--ui-small) + 2 * var(--ui-line)
+  );
+  gap: calc(var(--ui-xs) / 2);
+  padding-inline: var(--ui-xs);
+}
+.cu-composer-option-label {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: var(--ui-small);
+}
+.cu-composer-option > svg:last-child {
+  width: var(--ui-icon-sm);
+  height: var(--ui-icon-sm);
+}
+.cu-composer [data-align="block-end"] > .cu-group:last-child {
+  margin-inline-start: auto;
+}
+.cu-agent-empty {
+  display: grid;
+  place-items: center;
+  gap: var(--ui-sm);
+  padding: var(--ui-xl);
+  color: var(--ui-muted);
+}
